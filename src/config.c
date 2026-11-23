@@ -39,6 +39,8 @@ static const uint16 kDefaultKbdControls[kKeys_Total] = {
   _(SDLK_w), _(SDLK_o), S(SDLK_w), C(SDLK_e),
   // ClearKeyLog, StopReplay, Fullscreen, Reset, Pause, PauseDimmed, Turbo, ReplayTurbo, WindowBigger, WindowSmaller, DisplayPerf, ToggleRenderer
   _(SDLK_k), _(SDLK_l), A(SDLK_RETURN), C(SDLK_r), S(SDLK_p), _(SDLK_p), _(SDLK_TAB), _(SDLK_t), N, N, _(SDLK_f), _(SDLK_r),
+  // VolumeUp, VolumeDown, Rewind
+  N, N, _(SDLK_BACKSPACE),
 };
 #undef _
 #undef A
@@ -59,6 +61,7 @@ static const KeyNameId kKeyNameId[] = {
   S(CheatLife), S(CheatKeys), S(CheatEquipment), S(CheatWalkThroughWalls),
   S(ClearKeyLog), S(StopReplay), S(Fullscreen), S(Reset),
   S(Pause), S(PauseDimmed), S(Turbo), S(ReplayTurbo), S(WindowBigger), S(WindowSmaller), S(VolumeUp), S(VolumeDown), S(DisplayPerf), S(ToggleRenderer),
+  S(Rewind),
 };
 #undef S
 #undef M
@@ -440,6 +443,12 @@ static bool HandleIniConfig(int section, const char *key, char *value) {
       return true;
     } else if (StringEqualsNoCase(key, "DisplayPerfInTitle")) {
       return ParseBool(value, &g_config.display_perf_title);
+    } else if (StringEqualsNoCase(key, "RewindSeconds")) {
+      g_config.rewind_seconds = atoi(value);
+      return true;
+    } else if (StringEqualsNoCase(key, "RewindFrameInterval")) {
+      g_config.rewind_frame_interval = atoi(value);
+      return true;
     } else if (StringEqualsNoCase(key, "DisableFrameDelay")) {
       return ParseBool(value, &g_config.disable_frame_delay);
     } else if (StringEqualsNoCase(key, "Language")) {
@@ -518,6 +527,8 @@ static bool ParseOneConfigFile(const char *filename, int depth) {
 
 void ParseConfigFile(const char *filename) {
   g_config.msuvolume = 100;  // default msu volume, 100%
+  g_config.rewind_seconds = 30;
+  g_config.rewind_frame_interval = 2;
 
   if (filename != NULL || !ParseOneConfigFile("zelda3.user.ini", 0)) {
     if (filename == NULL)

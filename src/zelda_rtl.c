@@ -17,6 +17,7 @@ uint8 g_ram[131072];
 uint32 g_wanted_zelda_features;
 
 static void Startup_InitializeMemory();
+void ZeldaRewindClear();
 
 typedef struct SimpleHdma {
   const uint8 *table;
@@ -378,6 +379,7 @@ static void InternalSaveLoad(SaveLoadFunc *func, void *ctx) {
 
 void ZeldaReset(bool preserve_sram) {
   frame_ctr_dbg = 0;
+  ZeldaRewindClear();
   dma_reset(g_zenv.dma);
   ppu_reset(g_zenv.ppu);
   memset(g_zenv.ram, 0, 0x20000);
@@ -653,6 +655,314 @@ void StateRecorder_StopReplay(StateRecorder *sr) {
   sr->log.size = sr->replay_pos_last_complete;
 }
 
+// ---------------------------------------------------------------------------
+// Rewind
+//
+// Keeps the newest captured state uncompressed in |cur|. Each ring entry holds
+// the XOR delta (run-length encoded) that turns a state into the one captured
+// just before it, together with the StateRecorder fields of that older state.
+// Rewinding pops the newest delta, applies it to |cur| and loads the result.
+// ---------------------------------------------------------------------------
+
+enum { kRewindMaxBytes = 512 * 1024 * 1024 };
+
+typedef struct RewindMeta {
+  uint32 log_size;
+  uint32 frames_since_last;
+  uint32 total_frames;
+  uint16 last_inputs;
+#ifdef REWIND_SELFTEST
+  uint32 hash;
+#endif
+} RewindMeta;
+
+typedef struct RewindEntry {
+  uint8 *data;
+  uint32 size;
+  RewindMeta meta;
+} RewindEntry;
+
+static struct {
+  int capacity, interval, frame_ctr;
+  RewindEntry *ents;
+  int first, count;
+  size_t total_bytes;
+  ByteArray cur, tmp, enc;
+  RewindMeta cur_meta;
+  bool has_cur, did_rewind;
+} g_rewind;
+
+#ifdef REWIND_SELFTEST
+static uint32 RewindHash(const uint8 *p, size_t n) {
+  uint32 h = 2166136261u;
+  for (size_t i = 0; i < n; i++)
+    h = (h ^ p[i]) * 16777619u;
+  return h;
+}
+int g_rewind_selftest_mismatches, g_rewind_selftest_checks;
+#endif
+
+static void Rewind_WriteVl(ByteArray *arr, size_t v) {
+  while (v >= 0x80) {
+    ByteArray_AppendByte(arr, (uint8)(v | 0x80));
+    v >>= 7;
+  }
+  ByteArray_AppendByte(arr, (uint8)v);
+}
+
+static size_t Rewind_ReadVl(const uint8 **pp) {
+  const uint8 *p = *pp;
+  size_t v = 0;
+  int shift = 0;
+  uint8 t;
+  do {
+    t = *p++;
+    v |= (size_t)(t & 0x7f) << shift;
+    shift += 7;
+  } while (t & 0x80);
+  *pp = p;
+  return v;
+}
+
+// Encodes a ^ b as a list of (skip, length, xor bytes...) records.
+static void Rewind_EncodeDelta(ByteArray *out, const uint8 *a, const uint8 *b, size_t n) {
+  out->size = 0;
+  size_t i = 0;
+  while (i < n) {
+    size_t z = i;
+    while (z + 8 <= n) {
+      uint64 x, y;
+      memcpy(&x, a + z, 8);
+      memcpy(&y, b + z, 8);
+      if (x != y)
+        break;
+      z += 8;
+    }
+    while (z < n && a[z] == b[z])
+      z++;
+    if (z == n)
+      break;
+    // Literal run lasts until 8 consecutive equal bytes are found.
+    size_t e = z + 1, eq = 0;
+    for (size_t k = z + 1; k < n; k++) {
+      if (a[k] == b[k]) {
+        if (++eq >= 8)
+          break;
+      } else {
+        eq = 0;
+        e = k + 1;
+      }
+    }
+    Rewind_WriteVl(out, z - i);
+    Rewind_WriteVl(out, e - z);
+    size_t pos = out->size;
+    ByteArray_Resize(out, pos + (e - z));
+    for (size_t k = z; k < e; k++)
+      out->data[pos++] = a[k] ^ b[k];
+    i = e;
+  }
+}
+
+static void Rewind_ApplyDelta(uint8 *dst, size_t n, const uint8 *p, size_t size) {
+  const uint8 *pend = p + size;
+  size_t pos = 0;
+  while (p < pend) {
+    pos += Rewind_ReadVl(&p);
+    size_t len = Rewind_ReadVl(&p);
+    assert(pos + len <= n);
+    for (size_t k = 0; k < len; k++)
+      dst[pos + k] ^= p[k];
+    p += len;
+    pos += len;
+  }
+}
+
+static void Rewind_DropOldest() {
+  RewindEntry *e = &g_rewind.ents[g_rewind.first];
+  g_rewind.total_bytes -= e->size;
+  free(e->data);
+  e->data = NULL;
+  g_rewind.first = (g_rewind.first + 1) % g_rewind.capacity;
+  g_rewind.count--;
+}
+
+static void Rewind_ClearEntries() {
+  while (g_rewind.count)
+    Rewind_DropOldest();
+  g_rewind.first = 0;
+}
+
+void ZeldaRewindClear() {
+  if (!g_rewind.capacity)
+    return;
+  Rewind_ClearEntries();
+  g_rewind.has_cur = false;
+  g_rewind.did_rewind = false;
+  g_rewind.frame_ctr = 0;
+}
+
+void ZeldaRewindConfigure(int seconds, int frame_interval) {
+  ZeldaRewindClear();
+  free(g_rewind.ents);
+  g_rewind.ents = NULL;
+  g_rewind.capacity = 0;
+  if (seconds <= 0)
+    return;
+  if (frame_interval < 1) frame_interval = 1;
+  if (frame_interval > 60) frame_interval = 60;
+  if (seconds > 600) seconds = 600;
+  g_rewind.interval = frame_interval;
+  g_rewind.capacity = seconds * 60 / frame_interval + 1;
+  g_rewind.ents = calloc(g_rewind.capacity, sizeof(RewindEntry));
+  if (!g_rewind.ents) Die("memory allocation failed");
+}
+
+void ZeldaRewindGetStats(int *num_states, size_t *bytes) {
+  *num_states = g_rewind.count + g_rewind.has_cur;
+  *bytes = g_rewind.total_bytes + g_rewind.cur.capacity + g_rewind.tmp.capacity + g_rewind.enc.capacity +
+      (size_t)g_rewind.capacity * sizeof(RewindEntry);
+}
+
+static RewindMeta Rewind_GetRecorderMeta() {
+  RewindMeta m;
+  memset(&m, 0, sizeof(m));
+  m.log_size = (uint32)state_recorder.log.size;
+  m.frames_since_last = state_recorder.frames_since_last;
+  m.total_frames = state_recorder.total_frames;
+  m.last_inputs = state_recorder.last_inputs;
+  return m;
+}
+
+void ZeldaRewindCapture() {
+  if (!g_rewind.capacity || state_recorder.replay_mode)
+    return;
+  if (++g_rewind.frame_ctr < g_rewind.interval)
+    return;
+  g_rewind.frame_ctr = 0;
+  g_rewind.did_rewind = false;
+
+  g_rewind.tmp.size = 0;
+  SaveSnesState(&saveFunc, &g_rewind.tmp);
+  RewindMeta meta = Rewind_GetRecorderMeta();
+#ifdef REWIND_SELFTEST
+  meta.hash = RewindHash(g_rewind.tmp.data, g_rewind.tmp.size);
+#endif
+
+  if (g_rewind.has_cur && g_rewind.cur.size == g_rewind.tmp.size) {
+    Rewind_EncodeDelta(&g_rewind.enc, g_rewind.cur.data, g_rewind.tmp.data, g_rewind.cur.size);
+    if (g_rewind.count == g_rewind.capacity)
+      Rewind_DropOldest();
+    while (g_rewind.count && g_rewind.total_bytes + g_rewind.enc.size > kRewindMaxBytes)
+      Rewind_DropOldest();
+    uint8 *data = malloc(g_rewind.enc.size ? g_rewind.enc.size : 1);
+    if (data) {
+      memcpy(data, g_rewind.enc.data, g_rewind.enc.size);
+      RewindEntry *e = &g_rewind.ents[(g_rewind.first + g_rewind.count) % g_rewind.capacity];
+      e->data = data;
+      e->size = (uint32)g_rewind.enc.size;
+      e->meta = g_rewind.cur_meta;
+      g_rewind.count++;
+      g_rewind.total_bytes += e->size;
+    } else {
+      Rewind_ClearEntries();
+    }
+  } else {
+    Rewind_ClearEntries();
+  }
+  ByteArray t = g_rewind.cur;
+  g_rewind.cur = g_rewind.tmp;
+  g_rewind.tmp = t;
+  g_rewind.cur_meta = meta;
+  g_rewind.has_cur = true;
+}
+
+static void Rewind_LoadCur(bool full) {
+  // Keep the current SRAM: rewinding must never undo an in-game save.
+  static uint8 sram_backup[0x2000];
+  memcpy(sram_backup, g_zenv.sram, 0x2000);
+  g_skip_msu_restore = !full;
+  LoadFuncState st = { g_rewind.cur.data, g_rewind.cur.data + g_rewind.cur.size };
+  LoadSnesState(&loadFunc, &st);
+  assert(st.p == st.pend);
+  g_skip_msu_restore = false;
+  memcpy(g_zenv.sram, sram_backup, 0x2000);
+  EmuSynchronizeWholeState();
+
+  // Make the input log coherent with the loaded state.
+  StateRecorder *sr = &state_recorder;
+  RewindMeta *m = &g_rewind.cur_meta;
+  if (m->log_size <= sr->log.size)
+    sr->log.size = m->log_size;
+  sr->frames_since_last = m->frames_since_last;
+  sr->total_frames = m->total_frames;
+  sr->last_inputs = m->last_inputs;
+}
+
+bool ZeldaRewindStep() {
+  if (!g_rewind.capacity || state_recorder.replay_mode)
+    return false;
+  g_rewind.frame_ctr = 0;
+  if (!g_rewind.has_cur)
+    return true;
+  if (g_rewind.count) {
+    int idx = (g_rewind.first + g_rewind.count - 1) % g_rewind.capacity;
+    RewindEntry *e = &g_rewind.ents[idx];
+    Rewind_ApplyDelta(g_rewind.cur.data, g_rewind.cur.size, e->data, e->size);
+    g_rewind.cur_meta = e->meta;
+    g_rewind.total_bytes -= e->size;
+    free(e->data);
+    e->data = NULL;
+    g_rewind.count--;
+  } else if (g_rewind.did_rewind) {
+    return true;  // already sitting at the oldest state
+  }
+  Rewind_LoadCur(false);
+  g_rewind.did_rewind = true;
+#ifdef REWIND_SELFTEST
+  {
+    ByteArray chk = { 0 };
+    SaveSnesState(&saveFunc, &chk);
+    // SRAM is kept as-is on rewind, so compare against cur with the live SRAM.
+    uint32 h = RewindHash(g_rewind.cur.data, g_rewind.cur.size);
+    uint32 h2 = RewindHash(chk.data, chk.size);
+    g_rewind_selftest_checks++;
+    if (g_rewind.cur_meta.hash != h) {
+      g_rewind_selftest_mismatches++;
+      printf("REWIND SELFTEST: delta reconstruction mismatch!\n");
+    } else if (h2 != h && g_rewind_selftest_checks < 4) {
+      size_t diffs = 0, first = (size_t)-1;
+      for (size_t i = 0; i < chk.size && i < g_rewind.cur.size; i++)
+        if (chk.data[i] != g_rewind.cur.data[i]) { diffs++; if (first == (size_t)-1) first = i; }
+      printf("REWIND SELFTEST: reload differs in %d bytes (first at %d)\n", (int)diffs, (int)first);
+    }
+    ByteArray_Destroy(&chk);
+  }
+#endif
+  return true;
+}
+
+#ifdef REWIND_SELFTEST
+uint32 ZeldaSelftestRamHash() {
+  return RewindHash(g_zenv.ram, 0x20000);
+}
+bool ZeldaSelftestIsReplaying() {
+  return state_recorder.replay_mode;
+}
+uint32 ZeldaSelftestTotalFrames() {
+  return state_recorder.total_frames;
+}
+#endif
+
+void ZeldaRewindFinish() {
+  if (g_rewind.did_rewind && g_rewind.has_cur) {
+    Rewind_LoadCur(true);
+    int n; size_t bytes;
+    ZeldaRewindGetStats(&n, &bytes);
+    printf("Rewind: %d states left in buffer (%.1f MB)\n", n, bytes / 1048576.0);
+  }
+  g_rewind.frame_ctr = 0;
+}
+
 #ifdef _DEBUG
 // This can be used to read inputs from a text file for easier debugging
 int InputStateReadFromFile() {
@@ -805,8 +1115,10 @@ void SaveLoadSlot(int cmd, int which) {
     printf("*** %s slot %d\n",
       cmd == kSaveLoad_Save ? "Saving" : cmd == kSaveLoad_Load ? "Loading" : "Replaying", which);
 
-    if (cmd != kSaveLoad_Save)
+    if (cmd != kSaveLoad_Save) {
+      ZeldaRewindClear();
       StateRecorder_Load(&state_recorder, f, cmd == kSaveLoad_Replay);
+    }
     else
       StateRecorder_Save(&state_recorder, f);
 
@@ -856,10 +1168,12 @@ void PatchCommand(char c) {
     StateRecoderMultiPatch_Patch(&mp, 0xf360, rupees);  // link_rupees_goal
     StateRecoderMultiPatch_Patch(&mp, 0xf361, rupees >> 8);  // link_rupees_goal
   } else if (c == 'k') {
+    ZeldaRewindClear();
     StateRecorder_ClearKeyLog(&state_recorder);
   } else if (c == 'o') {
     StateRecoderMultiPatch_Patch(&mp, 0xf36f, 1);
   } else if (c == 'l') {
+    ZeldaRewindClear();
     StateRecorder_StopReplay(&state_recorder);
   } else if (c == 'E') {
     StateRecoderMultiPatch_Patch(&mp, 0x37f, g_ram[0x37f] ^ 1);

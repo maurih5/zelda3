@@ -29,6 +29,17 @@
 
 static bool g_run_without_emu = 0;
 
+#ifdef REWIND_SELFTEST
+uint32 ZeldaSelftestRamHash();
+bool ZeldaSelftestIsReplaying();
+uint32 ZeldaSelftestTotalFrames();
+extern int g_rewind_selftest_mismatches, g_rewind_selftest_checks;
+static uint8 *g_st_ram_copy;
+static double g_st_cap_time, g_st_step_time, g_st_cap_max, g_st_step_max;
+static int g_st_cap_n, g_st_step_n;
+static double StNow() { return (double)SDL_GetPerformanceCounter() / SDL_GetPerformanceFrequency(); }
+#endif
+
 // Forwards
 static bool LoadRom(const char *filename);
 static void LoadLinkGraphics();
@@ -55,7 +66,7 @@ static const char kWindowTitle[] = "The Legend of Zelda: A Link to the Past";
 static uint32 g_win_flags = SDL_WINDOW_RESIZABLE;
 static SDL_Window *g_window;
 
-static uint8 g_paused, g_turbo, g_replay_turbo = true, g_cursor = true;
+static uint8 g_paused, g_turbo, g_rewind_held, g_rewinding, g_replay_turbo = true, g_cursor = true;
 static uint8 g_current_window_scale;
 static uint8 g_gamepad_buttons;
 static int g_input1_state;
@@ -305,6 +316,7 @@ int main(int argc, char** argv) {
                        g_config.no_sprite_limits * kPpuRenderFlags_NoSpriteLimits;
   ZeldaEnableMsu(g_config.enable_msu);
   ZeldaSetLanguage(g_config.language);
+  ZeldaRewindConfigure(g_config.rewind_seconds, g_config.rewind_frame_interval);
 
   if (g_config.fullscreen == 1)
     g_win_flags ^= SDL_WINDOW_FULLSCREEN_DESKTOP;
@@ -440,8 +452,9 @@ int main(int argc, char** argv) {
       }
     }
 
-    if (g_paused != audiopaused) {
-      audiopaused = g_paused;
+    // Audio is muted while rewinding.
+    if ((g_paused || g_rewinding) != audiopaused) {
+      audiopaused = g_paused || g_rewinding;
       if (device)
         SDL_PauseAudioDevice(device, audiopaused);
     }
@@ -457,13 +470,120 @@ int main(int argc, char** argv) {
       g_gamepad_buttons = 0;
     inputs |= g_gamepad_buttons;
 
+#ifdef REWIND_SELFTEST
+    {
+      static uint32 rng = 12345, cur_in, saved_hash, saved_frames;
+      static int f = 0, exit_code = 1;
+      static bool norewind, replay_started;
+      if (f == 0) {
+        norewind = getenv("ZELDA3_SELFTEST_NOREWIND") != NULL;
+        g_config.disable_frame_delay = true;
+        printf("SELFTEST start (%s)\n", norewind ? "no rewind" : "with rewind");
+        int kb = FindCmdForSdlKey(SDLK_BACKSPACE, 0);
+        int gp = FindCmdForGamepadButton(kGamepadBtn_L2, 1 << kGamepadBtn_Back | 1 << kGamepadBtn_L2);
+        int gp_alone = FindCmdForGamepadButton(kGamepadBtn_L2, 1 << kGamepadBtn_L2);
+        int turbo = FindCmdForGamepadButton(kGamepadBtn_R2, 1 << kGamepadBtn_Back | 1 << kGamepadBtn_R2);
+        printf("Mapping: Backspace->%d Back+L2->%d L2 solo->%d Back+R2->%d (Rewind=%d Turbo=%d)\n",
+               kb, gp, gp_alone, turbo, kKeys_Rewind, kKeys_Turbo);
+        if (kb != kKeys_Rewind || gp != kKeys_Rewind || gp_alone != 0 || turbo != kKeys_Turbo) {
+          printf("SELFTEST FAIL: mapping\n");
+          exit(3);
+        }
+        HandleCommand(kKeys_Load + 0, true);
+        HandleCommand(kKeys_ClearKeyLog, true);
+      }
+      if (f % 16 == 0) {
+        static const int kDirs[8] = { 1 << 4, 1 << 5, 1 << 6, 1 << 7, 1 << 4 | 1 << 7, 1 << 5 | 1 << 6, 0, 1 << 6 };
+        rng = rng * 1103515245 + 12345;
+        cur_in = kDirs[(rng >> 16) & 7] | (((rng >> 20) & 3) == 0 ? 1 : 0);
+      }
+      inputs = cur_in;
+      bool rw_phase = (f >= 1200 && f < 1500) || (f >= 2100 && f < 4500) || (f >= 4700 && f < 4800);
+      if (f == 4600) {
+        HandleCommand(kKeys_Load + 0, true);
+        HandleCommand(kKeys_ClearKeyLog, true);
+      }
+      g_rewind_held = rw_phase && !norewind;
+      if (f == 1199 || f == 1499 || f == 2099 || f == 4499 || f == 4699 || f == 4799) {
+        int n; size_t b;
+        ZeldaRewindGetStats(&n, &b);
+        printf("f=%d: rewind buffer %d states, %.2f MB, game frames=%d\n", f, n, b / 1048576.0, (int)ZeldaSelftestTotalFrames());
+      }
+      if (f == 5000) {
+        saved_hash = ZeldaSelftestRamHash();
+        saved_frames = ZeldaSelftestTotalFrames();
+        g_st_ram_copy = malloc(0x20000);
+        memcpy(g_st_ram_copy, g_ram, 0x20000);
+        HandleCommand(kKeys_Save + 9, true);
+        HandleCommand(kKeys_Replay + 9, true);
+        replay_started = true;
+        printf("Saved slot 9 (total_frames=%d), replaying it...\n", (int)saved_frames);
+      } else if (replay_started && !ZeldaSelftestIsReplaying()) {
+        uint32 h = ZeldaSelftestRamHash();
+        int game_diffs = 0;
+        for (int i = 0; i < 0x20000; i++) {
+          if (g_ram[i] != g_st_ram_copy[i]) {
+            bool msu = (i >= 0x1DB20 && i < 0x1DBA0) || i == 0x654;
+            if (!msu) game_diffs++;
+            printf("  ram diff at 0x%05X: saved %02X replay %02X%s\n", i, g_st_ram_copy[i], g_ram[i], msu ? " (msu state)" : "");
+          }
+        }
+        printf("Non-MSU RAM differences: %d\n", game_diffs);
+        if (game_diffs == 0) h = saved_hash;
+        printf("Replay finished: total_frames=%d ram hash %s\n", (int)ZeldaSelftestTotalFrames(),
+               h == saved_hash ? "MATCHES" : "DIFFERS");
+        printf("Rewind checks: %d, delta mismatches: %d\n", g_rewind_selftest_checks, g_rewind_selftest_mismatches);
+        if (g_st_cap_n) printf("Capture: avg %.3f ms, max %.3f ms (%d)\n", g_st_cap_time / g_st_cap_n * 1000, g_st_cap_max * 1000, g_st_cap_n);
+        if (g_st_step_n) printf("Step: avg %.3f ms, max %.3f ms (%d)\n", g_st_step_time / g_st_step_n * 1000, g_st_step_max * 1000, g_st_step_n);
+        exit_code = (h == saved_hash && g_rewind_selftest_mismatches == 0) ? 0 : 2;
+        printf("SELFTEST %s\n", exit_code == 0 ? "PASS" : "FAIL");
+        fflush(stdout);
+        exit(exit_code);
+      }
+      f++;
+    }
+#endif
+
+    bool is_replay = false;
+    bool rewound = false;
     SDL_LockMutex(g_audio_mutex);
-    bool is_replay = ZeldaRunFrame(inputs);
+#ifdef REWIND_SELFTEST
+    double st_t0 = StNow();
+#endif
+    if (g_rewind_held)
+      rewound = ZeldaRewindStep();
+#ifdef REWIND_SELFTEST
+    if (rewound) {
+      double d = StNow() - st_t0;
+      g_st_step_time += d, g_st_step_n++;
+      if (d > g_st_step_max) g_st_step_max = d;
+    }
+#endif
+    if (!rewound) {
+      if (g_rewinding) {
+        ZeldaRewindFinish();
+        g_rewinding = false;
+      }
+      is_replay = ZeldaRunFrame(inputs);
+#ifdef REWIND_SELFTEST
+      double st_t1 = StNow();
+#endif
+      ZeldaRewindCapture();
+#ifdef REWIND_SELFTEST
+      double d = StNow() - st_t1;
+      if (d > 0.00005) {  // only count real captures
+        g_st_cap_time += d, g_st_cap_n++;
+        if (d > g_st_cap_max) g_st_cap_max = d;
+      }
+#endif
+    } else {
+      g_rewinding = true;
+    }
     SDL_UnlockMutex(g_audio_mutex);
 
     frameCtr++;
 
-    if ((g_turbo ^ (is_replay & g_replay_turbo)) && (frameCtr & (g_turbo ? 0xf : 0x7f)) != 0) {
+    if (!rewound && (g_turbo ^ (is_replay & g_replay_turbo)) && (frameCtr & (g_turbo ? 0xf : 0x7f)) != 0) {
       continue;
     }
 
@@ -574,6 +694,11 @@ static void HandleCommand(uint32 j, bool pressed) {
 
   if (j == kKeys_Turbo) {
     g_turbo = pressed;
+    return;
+  }
+
+  if (j == kKeys_Rewind) {
+    g_rewind_held = pressed;
     return;
   }
 

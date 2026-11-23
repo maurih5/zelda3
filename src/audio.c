@@ -465,6 +465,9 @@ bool ZeldaIsMusicPlaying() {
   }
 }
 
+// Set while rewinding: skip reopening the MSU track on every rewind step.
+bool g_skip_msu_restore;
+
 void ZeldaRestoreMusicAfterLoad_Locked(bool is_reset) {
   // Restore spc variables from the ram dump.
   SpcPlayer_CopyVariablesFromRam(g_zenv.player);
@@ -481,7 +484,7 @@ void ZeldaRestoreMusicAfterLoad_Locked(bool is_reset) {
   }
 
   MsuPlayer *mp = &g_msu_player;
-  if (mp->enabled) {
+  if (mp->enabled && !g_skip_msu_restore) {
     mp->volume = 0.0;
     MsuPlayer_Open(mp, (music_unk1 == 0xf1) ? ((MsuPlayerResumeInfo*)msu_resume_info)->orig_track : 
                    music_unk1, true);

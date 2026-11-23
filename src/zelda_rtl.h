@@ -69,6 +69,14 @@ void SaveLoadSlot(int cmd, int which);
 void ZeldaWriteSram();
 void ZeldaReadSram();
 
+// Rewind support (in-memory ring buffer of delta-compressed states)
+void ZeldaRewindConfigure(int seconds, int frame_interval);
+void ZeldaRewindCapture();     // call after each normally emulated frame
+bool ZeldaRewindStep();        // go back one state. false = rewind not possible now (e.g. replay)
+void ZeldaRewindFinish();      // call when the rewind key is released
+void ZeldaRewindClear();
+void ZeldaRewindGetStats(int *num_states, size_t *bytes);
+
 typedef void ZeldaRunFrameFunc(uint16 input, int run_what);
 typedef void ZeldaSyncAllFunc();
 

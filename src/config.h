@@ -34,6 +34,7 @@ enum {
   kKeys_ToggleRenderer,
   kKeys_VolumeUp,
   kKeys_VolumeDown,
+  kKeys_Rewind,
   kKeys_Total,
 };
 
@@ -68,6 +69,8 @@ typedef struct Config {
   bool disable_frame_delay;
   uint8 msuvolume;
   uint32 features0;
+  int rewind_seconds;
+  int rewind_frame_interval;
 
   const char *link_graphics;
   char *memory_buffer;
