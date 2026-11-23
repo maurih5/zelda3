@@ -440,6 +440,8 @@ static bool HandleIniConfig(int section, const char *key, char *value) {
       return true;
     } else if (StringEqualsNoCase(key, "DimFlashes")) {
       return ParseBoolBit(value, &g_config.features0, kFeatures0_DimFlashes);
+    } else if (StringEqualsNoCase(key, "EdgeEffect")) {
+      return ParseBool(value, &g_config.edge_effect);
     }
   } else if (section == 2) {
     if (StringEqualsNoCase(key, "EnableAudio")) {
@@ -492,6 +494,8 @@ static bool HandleIniConfig(int section, const char *key, char *value) {
           h = 240, g_config.extend_y = true;
         else if (strcmp(s, "16:9") == 0)
           g_config.extended_aspect_ratio = (h * 16 / 9 - 256) / 2;
+        else if (strcmp(s, "3:2") == 0)
+          g_config.extended_aspect_ratio = (h * 3 / 2 - 256) / 2;
         else if (strcmp(s, "16:10") == 0)
           g_config.extended_aspect_ratio = (h * 16 / 10 - 256) / 2;
         else if (strcmp(s, "18:9") == 0)
@@ -517,6 +521,15 @@ static bool HandleIniConfig(int section, const char *key, char *value) {
       return true;
     } else if (StringEqualsNoCase(key, "AutosaveSlots")) {
       g_config.autosave_slots = atoi(value);
+      return true;
+    } else if (StringEqualsNoCase(key, "Rumble")) {
+      g_config.rumble_intensity = IntMin(IntMax(atoi(value), 0), 100);
+      return true;
+    } else if (StringEqualsNoCase(key, "StickDeadzone")) {
+      g_config.stick_deadzone = IntMin(IntMax(atoi(value), 5), 90);
+      return true;
+    } else if (StringEqualsNoCase(key, "TurboSpeed")) {
+      g_config.turbo_speed = IntMin(IntMax(atoi(value), 0), 16);
       return true;
     } else if (StringEqualsNoCase(key, "RewindSeconds")) {
       g_config.rewind_seconds = atoi(value);
@@ -559,6 +572,8 @@ static bool HandleIniConfig(int section, const char *key, char *value) {
       return ParseBoolBit(value, &g_config.features0, kFeatures0_GameChangingBugFixes);
     } else if (StringEqualsNoCase(key, "CancelBirdTravel")) {
       return ParseBoolBit(value, &g_config.features0, kFeatures0_CancelBirdTravel);
+    } else if (StringEqualsNoCase(key, "FastDialog")) {
+      return ParseBoolBit(value, &g_config.features0, kFeatures0_FastDialog);
     }
   }
   return false;
@@ -681,6 +696,10 @@ void ParseConfigFile(const char *filename) {
   g_config.rewind_frame_interval = 2;
   g_config.autosave_minutes = 5;
   g_config.autosave_slots = 10;
+  g_config.edge_effect = true;
+  g_config.rumble_intensity = 70;
+  g_config.stick_deadzone = 30;
+  g_config.turbo_speed = 0;
   SetDefaultKeys();
 
   if (filename != NULL || !ParseOneConfigFile("zelda3.user.ini", 0)) {

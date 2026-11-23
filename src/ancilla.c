@@ -1,3 +1,4 @@
+#include "haptics.h"
 #include "ancilla.h"
 #include "variables.h"
 #include "sprite.h"
@@ -1357,6 +1358,7 @@ void Boomerang_StopOffScreen(int k) {  // 8892ab
 }
 
 void Boomerang_Terminate(int k) {  // 8892f5
+  Haptic_Event(kHaptic_BoomerangCatch, 0);
   ancilla_type[k] = 0;
   flag_for_boomerang_in_place = 0;
   if (link_item_in_hand & 0x80) {
@@ -1550,6 +1552,7 @@ label1:
   if (!--ancilla_arr3[k]) {
     if (++ancilla_item_to_link[k] == 1) {
       Ancilla_Sfx2_Pan(k, 0xc);
+      Haptic_Event(kHaptic_Environment, kHapticEnv_BombExplode);
       if (k + 1 == flag_is_ancilla_to_pick_up) {
         flag_is_ancilla_to_pick_up = 0;
         if (link_state_bits & 0x80) {
@@ -3169,6 +3172,7 @@ endif_7:
     if (!(tiledetect_misc_tiles & 3)) {
       AncillaAdd_HookshotWallClink(k, 6, 1);
       Ancilla_Sfx2_Pan(k, (tiledetect_misc_tiles & 0x30) ? 6 : 5);
+      Haptic_Event(kHaptic_HookshotWall, 0);
     }
   }
 
@@ -6210,6 +6214,7 @@ int AncillaAdd_Arrow(uint8 a, uint8 ax, uint8 ay, uint16 xcoord, uint16 ycoord) 
 
   if (k >= 0) {
     sound_effect_1 = Link_CalculateSfxPan() | 7;
+    Haptic_Event(kHaptic_ItemUsed, 3);
     ancilla_H[k] = 0;
     ancilla_item_to_link[k] = 8;
     int j = ax >> 1;

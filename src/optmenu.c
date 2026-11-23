@@ -17,6 +17,7 @@
 #include "savemenu.h"
 #include "optmenu.h"
 #include "snes/ppu.h"
+#include "haptics.h"
 
 // ---------------------------------------------------------------------------
 // Option definitions
@@ -27,6 +28,7 @@ enum {
   kT_Slider,
   kT_Toggle,
   kT_Shader,
+  kT_Choice,
 };
 
 enum {
@@ -44,6 +46,11 @@ enum {
   kO_RewindSeconds,
   kO_AutosaveMinutes,
   kO_AutosaveSlots,
+  kO_Aspect,
+  kO_EdgeEffect,
+  kO_Rumble,
+  kO_Deadzone,
+  kO_TurboSpeed,
   kO_Feature,  // + index in kFeatureDefs
 };
 
@@ -67,6 +74,7 @@ static const FeatureDef kFeatureDefs[] = {
   { kFeatures0_CancelBirdTravel, "CancelBirdTravel" },
   { kFeatures0_MiscBugFixes, "MiscBugFixes" },
   { kFeatures0_GameChangingBugFixes, "GameChangingBugFixes" },
+  { kFeatures0_FastDialog, "FastDialog" },
 };
 
 typedef struct OptDef {
@@ -82,13 +90,19 @@ static const OptDef kOptions[] = {
   { kT_Slider, kO_Sfx, "Efectos", "Volumen de los efectos de sonido (y de la música original si no hay MSU)." },
   { kT_Header, 0, "Imagen", NULL },
   { kT_Shader, kO_Shader, "Shader", "A: elegir un shader de la carpeta glsl-shaders. Se aplica en el momento." },
+  { kT_Choice, kO_Aspect, "Formato de pantalla", "Ancho de la imagen. Se aplica al reiniciar el juego." },
+  { kT_Toggle, kO_EdgeEffect, "Rellenar bordes", "En pantalla ancha, rellena las franjas negras con un reflejo borroso de la escena." },
   { kT_Toggle, kO_Fullscreen, "Pantalla completa", "Alternar entre ventana y pantalla completa." },
   { kT_Toggle, kO_KeepAspect, "Mantener proporción", "Si se desactiva, la imagen se estira para llenar la pantalla." },
   { kT_Toggle, kO_Linear, "Filtro suave", "Suaviza los píxeles. Sin efecto mientras haya un shader activo." },
   { kT_Toggle, kO_NewRenderer, "Renderizador rápido", "Renderizador optimizado del PPU. Desactivalo si ves errores gráficos." },
   { kT_Toggle, kO_Mode7, "Mapa en alta resolución", "Dibuja el mapa del mundo (Mode 7) con 4 veces más resolución." },
   { kT_Toggle, kO_NoSpriteLimits, "Sin límite de sprites", "Evita que los sprites parpadeen o desaparezcan cuando hay muchos juntos." },
-  { kT_Header, 0, "Rebobinado y autoguardado", NULL },
+  { kT_Header, 0, "Joystick", NULL },
+  { kT_Slider, kO_Rumble, "Vibración", "Fuerza de la vibración con espadazos, golpes, daño, ítems, bombas y cofres. 0 la apaga." },
+  { kT_Slider, kO_Deadzone, "Zona muerta del stick", "Cuánto hay que mover el stick antes de que Link camine. Subila si Link se mueve solo." },
+  { kT_Header, 0, "Rebobinado, avance y autoguardado", NULL },
+  { kT_Slider, kO_TurboSpeed, "Avance rápido", "Velocidad mientras mantenés la tecla de avance rápido." },
   { kT_Slider, kO_RewindSeconds, "Rebobinado", "Cuántos segundos se pueden rebobinar. Cambiarlo borra el historial actual." },
   { kT_Slider, kO_AutosaveMinutes, "Autoguardar cada", "Cada cuánto se guarda un state solo. Igual se guarda al salir y al entrar o salir de dungeons." },
   { kT_Slider, kO_AutosaveSlots, "Autoguardados", "Cuántos autoguardados se conservan en saves/auto. Con 0 se desactiva el autoguardado." },
@@ -107,6 +121,7 @@ static const OptDef kOptions[] = {
   { kT_Toggle, kO_Feature + 11, "Cancelar viaje del pájaro", "Permite cancelar el viaje en el pájaro con X." },
   { kT_Toggle, kO_Feature + 12, "Arreglos de bugs", "Corrige varios bugs del juego original." },
   { kT_Toggle, kO_Feature + 13, "Arreglos que cambian el juego", "Corrige bugs que cambian cómo se juega (por ejemplo, algunos trucos dejan de funcionar)." },
+  { kT_Toggle, kO_Feature + 14, "Diálogos rápidos", "Mantené A para que el texto vaya al doble de velocidad; B escribe el resto del cuadro de una." },
 };
 
 typedef struct CtlDef {
@@ -234,6 +249,34 @@ static bool IsOpenGL() {
   return Main_ShaderSupported();
 }
 
+// Aspect ratios offered in the menu (ExtendedAspectRatio). Changing it needs a restart,
+// so the chosen one is remembered here until then.
+static const char *const kAspectNames[] = { "4:3", "16:9", "16:10", "18:9", "3:2" };
+static int g_aspect_choice = -1;
+
+static int CurrentAspect() {
+  if (g_aspect_choice >= 0)
+    return g_aspect_choice;
+  int h = g_config.extend_y ? 240 : 224;
+  int ear = g_config.extended_aspect_ratio;
+  static const int kNum[] = { 4, 16, 16, 18, 3 }, kDen[] = { 3, 9, 10, 9, 2 };
+  for (int i = 0; i < 5; i++) {
+    int e = i == 0 ? 0 : (h * kNum[i] / kDen[i] - 256) / 2;
+    if (e == ear)
+      return g_aspect_choice = i;
+  }
+  return g_aspect_choice = 1;
+}
+
+static void SaveAspect(int choice) {
+  char buf[96];
+  bool wide = choice != 0;
+  snprintf(buf, sizeof(buf), "%s%s%s%s", g_config.extend_y ? "extend_y, " : "", kAspectNames[choice],
+           wide && g_config.extended_aspect_ratio && !(g_config.features0 & kFeatures0_ExtendScreen64) ? ", unchanged_sprites" : "",
+           wide && g_config.extended_aspect_ratio && !(g_config.features0 & kFeatures0_WidescreenVisualFixes) ? ", no_visual_fixes" : "");
+  Config_SetOverride("General", "ExtendedAspectRatio", buf);
+}
+
 static int GetValue(int id) {
   switch (id) {
   case kO_Volume: return g_config.volume;
@@ -248,6 +291,11 @@ static int GetValue(int id) {
   case kO_RewindSeconds: return g_config.rewind_seconds;
   case kO_AutosaveMinutes: return g_config.autosave_minutes;
   case kO_AutosaveSlots: return g_config.autosave_slots;
+  case kO_EdgeEffect: return g_config.edge_effect;
+  case kO_Rumble: return g_config.rumble_intensity;
+  case kO_Deadzone: return g_config.stick_deadzone;
+  case kO_TurboSpeed: return g_config.turbo_speed < 2 ? 1 : g_config.turbo_speed;
+  case kO_Aspect: return CurrentAspect();
   default:
     if (id >= kO_Feature && id < kO_Feature + countof(kFeatureDefs))
       return (g_config.features0 & kFeatureDefs[id - kO_Feature].bit) != 0;
@@ -260,6 +308,9 @@ static void SliderRange(int id, int *lo, int *hi, int *step) {
   if (id == kO_RewindSeconds) *hi = 300, *step = 10;
   if (id == kO_AutosaveMinutes) *hi = 60, *step = 1;
   if (id == kO_AutosaveSlots) *hi = 50, *step = 1;
+  if (id == kO_Rumble) *hi = 100, *step = 10;
+  if (id == kO_Deadzone) *lo = 10, *hi = 60, *step = 5;
+  if (id == kO_TurboSpeed) *lo = 1, *hi = 10, *step = 1;
 }
 
 static void FormatValue(int id, char *buf, size_t n) {
@@ -280,6 +331,20 @@ static void FormatValue(int id, char *buf, size_t n) {
   case kO_AutosaveSlots:
     if (v <= 0) snprintf(buf, n, "Desactivado");
     else snprintf(buf, n, "%d", v);
+    break;
+  case kO_Rumble:
+    if (v <= 0) snprintf(buf, n, "Apagada");
+    else snprintf(buf, n, "%d%%", v);
+    break;
+  case kO_Deadzone:
+    snprintf(buf, n, "%d%%", v);
+    break;
+  case kO_TurboSpeed:
+    if (v <= 1) snprintf(buf, n, "Máxima");
+    else snprintf(buf, n, "x%d", v);
+    break;
+  case kO_Aspect:
+    snprintf(buf, n, "%s", kAspectNames[v]);
     break;
   default:
     snprintf(buf, n, "%s", v ? "Sí" : "No");
@@ -334,6 +399,20 @@ static void ChangeOption(int id, int dir) {
       SaveMenu_Init(g_config.autosave_minutes, g_config.autosave_slots);
       SaveInt("General", "AutosaveMinutes", nv);
       break;
+    case kO_Rumble:
+      g_config.rumble_intensity = nv;
+      Haptics_Configure(nv);
+      SaveInt("General", "Rumble", nv);
+      Haptic_Event(kHaptic_SwordHitEnemy, 0);  // let the player feel the new strength
+      break;
+    case kO_Deadzone:
+      g_config.stick_deadzone = nv;
+      SaveInt("General", "StickDeadzone", nv);
+      break;
+    case kO_TurboSpeed:
+      g_config.turbo_speed = nv <= 1 ? 0 : nv;
+      SaveInt("General", "TurboSpeed", g_config.turbo_speed);
+      break;
     case kO_AutosaveSlots:
       g_config.autosave_slots = nv;
       SaveMenu_Init(g_config.autosave_minutes, g_config.autosave_slots);
@@ -343,6 +422,14 @@ static void ChangeOption(int id, int dir) {
     return;
   }
 
+  if (type == kT_Choice && id == kO_Aspect) {
+    if (dir == 0) dir = 1;
+    int c = (CurrentAspect() + dir + 5) % 5;
+    g_aspect_choice = c;
+    SaveAspect(c);
+    SetMsg("Formato %s: se aplica al reiniciar el juego", kAspectNames[c]);
+    return;
+  }
   if (type != kT_Toggle)
     return;
   bool on = !GetValue(id);
@@ -368,6 +455,10 @@ static void ChangeOption(int id, int dir) {
     break;
   case kO_Mode7:
     SetRenderFlag(kPpuRenderFlags_4x4Mode7, on, &g_config.enhanced_mode7, "EnhancedMode7");
+    break;
+  case kO_EdgeEffect:
+    g_config.edge_effect = on;
+    SaveInt("Graphics", "EdgeEffect", on);
     break;
   case kO_NoSpriteLimits:
     SetRenderFlag(kPpuRenderFlags_NoSpriteLimits, on, &g_config.no_sprite_limits, "NoSpriteLimits");
@@ -775,7 +866,7 @@ bool OptMenu_Input(int page, int action) {
     } else if (action == kSaveMenu_Ok) {
       if (o->type == kT_Shader)
         OpenShaderPicker();
-      else if (o->type == kT_Toggle)
+      else if (o->type == kT_Toggle || o->type == kT_Choice)
         ChangeOption(o->id, 0);
     }
   } else {
@@ -972,7 +1063,7 @@ static void DrawOptions(Canvas *c, int x, int w, int top, int bottom) {
       if (!IsOpenGL())
         snprintf(buf, sizeof(buf), "Requiere OpenGL");
       DrawText(c, vx, y, buf, IsOpenGL() ? kCol_White : kCol_Gray, value_w - 6);
-    } else if (o->type == kT_Slider) {
+    } else if (o->type == kT_Slider || o->type == kT_Choice) {
       int lo, hi, step;
       SliderRange(o->id, &lo, &hi, &step);
       int v = GetValue(o->id);

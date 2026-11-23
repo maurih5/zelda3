@@ -28,6 +28,8 @@
 #include "audio.h"
 #include "savemenu.h"
 #include "optmenu.h"
+#include "haptics.h"
+#include "edgefx.h"
 
 static bool g_run_without_emu = 0;
 
@@ -283,6 +285,11 @@ static void DrawPpuFrameWithPerf() {
     }
   }
 #endif
+  if (g_config.edge_effect && render_scale == 1 && g_zenv.ppu->extraLeftRight && !g_zenv.ppu->forcedBlank) {
+    Ppu *ppu = g_zenv.ppu;
+    EdgeEffect_Apply(pixel_buffer, pitch, g_snes_width, g_snes_height,
+                     ppu->extraLeftRight - ppu->extraLeftCur, ppu->extraLeftRight - ppu->extraRightCur);
+  }
   SaveMenu_CaptureFrame(pixel_buffer, pitch, render_scale, g_snes_width, g_snes_height);
   SaveMenu_DrawOverlay(pixel_buffer, pitch, render_scale, g_snes_width, g_snes_height);
   if (g_display_perf)
@@ -432,6 +439,7 @@ int main(int argc, char** argv) {
   ZeldaSetLanguage(g_config.language);
   ZeldaRewindConfigure(g_config.rewind_seconds, g_config.rewind_frame_interval);
   SaveMenu_Init(g_config.autosave_minutes, g_config.autosave_slots);
+  Haptics_Configure(g_config.rumble_intensity);
 
   if (g_config.fullscreen == 1)
     g_win_flags ^= SDL_WINDOW_FULLSCREEN_DESKTOP;
@@ -740,6 +748,37 @@ int main(int argc, char** argv) {
       }
       inputs = cur_in;
       if (getenv("ZELDA3_SELFTEST_STILL")) inputs = 0;
+      if (getenv("ZELDA3_SELFTEST_DIALOG")) {
+        // Opens a message and counts frames until it waits for the player.
+        // Modes: off (normal), hold (A held), b (tapping B).
+        extern void Sprite_ShowMessageUnconditional(uint16 msg);
+        extern bool Text_IsWaitingForPlayer();
+        static int start = -1, done_at = -1;
+        const char *m = getenv("ZELDA3_SELFTEST_DIALOG");
+        bool fast = strcmp(m, "off") != 0;
+        inputs = 0;
+        if (f == 150)
+          g_wanted_zelda_features = fast ? (g_wanted_zelda_features | kFeatures0_FastDialog) : (g_wanted_zelda_features & ~kFeatures0_FastDialog);
+        if (f == 200) {
+          printf("DIALOG modulo antes: %d\n", main_module_index);
+          Sprite_ShowMessageUnconditional(getenv("ZELDA3_SELFTEST_MSG") ? atoi(getenv("ZELDA3_SELFTEST_MSG")) : 0x18c);
+          start = f;
+        }
+        if (start >= 0 && done_at < 0) {
+          if (!strcmp(m, "hold")) inputs = 1 << 8;          // A
+          if (!strcmp(m, "b")) inputs = (f & 1) ? 1 : 0;    // tap B
+          if (Text_IsWaitingForPlayer()) {
+            printf("DIALOG %s: %d cuadros hasta esperar al jugador\n", m, f - start);
+            done_at = f;
+            g_st_dump_frame = 1;
+          } else if (f - start > 3000) {
+            printf("DIALOG %s: TIMEOUT\n", m);
+            exit(3);
+          }
+        }
+        if (done_at >= 0 && f > done_at + 2)
+          exit(0);
+      }
       if (f == g_st_toast_dump_at)
         g_st_dump_frame = 1;
       if (f == 2400) {
@@ -853,7 +892,7 @@ int main(int argc, char** argv) {
         printf("Volumen %d -> %d\n", vol0, g_config.volume);
         SelftestCheck(g_config.volume == vol0 - 20, "izquierda baja el volumen");
         SDL_LockMutex(g_audio_mutex);
-        for (int i = 0; i < 15; i++) SaveMenu_Input(kSaveMenu_Down);
+        for (int i = 0; i < 20; i++) SaveMenu_Input(kSaveMenu_Down);
         uint32 feat0 = g_config.features0;
         SaveMenu_Input(kSaveMenu_Ok);
         SDL_UnlockMutex(g_audio_mutex);
@@ -861,7 +900,7 @@ int main(int argc, char** argv) {
                       (g_wanted_zelda_features & kFeatures0_TurnWhileDashing), "A activa 'Girar al correr'");
         SelftestDumpMenu("selftest_opt2.bmp");
         SDL_LockMutex(g_audio_mutex);
-        for (int i = 0; i < 12; i++) SaveMenu_Input(kSaveMenu_Up);
+        for (int i = 0; i < 17; i++) SaveMenu_Input(kSaveMenu_Up);
         SaveMenu_Input(kSaveMenu_Ok);  // Shader (needs OpenGL)
         SDL_UnlockMutex(g_audio_mutex);
         SelftestDumpMenu("selftest_opt3.bmp");
@@ -964,8 +1003,12 @@ int main(int argc, char** argv) {
 
     frameCtr++;
 
-    if (!rewound && (g_turbo ^ (is_replay & g_replay_turbo)) && (frameCtr & (g_turbo ? 0xf : 0x7f)) != 0) {
-      continue;
+    if (!rewound && (g_turbo ^ (is_replay & g_replay_turbo))) {
+      // TurboSpeed = N shows one of every N frames at the normal pace (N times faster);
+      // 0 runs as fast as possible.
+      uint32 every = (g_turbo && g_config.turbo_speed >= 2) ? g_config.turbo_speed : g_turbo ? 16 : 128;
+      if (frameCtr % every != 0)
+        continue;
     }
 
     DrawPpuFrameWithPerf();
@@ -1385,7 +1428,8 @@ static void HandleGamepadAxisInput(int gamepad_id, int axis, int value) {
     *(axis == SDL_CONTROLLER_AXIS_LEFTX ? &last_x : &last_y) = value;
     int buttons = 0;
     // 64-bit: with the stick fully in a corner x*x + y*y doesn't fit in an int.
-    if ((int64)last_x * last_x + (int64)last_y * last_y >= 10000 * 10000) {
+    int64 dz = (int64)g_config.stick_deadzone * 32767 / 100;
+    if ((int64)last_x * last_x + (int64)last_y * last_y >= dz * dz) {
       // in the non deadzone part, divide the circle into eight 45 degree
       // segments rotated by 22.5 degrees that control which direction to move.
       // todo: do this without floats?

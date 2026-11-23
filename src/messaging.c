@@ -2118,8 +2118,37 @@ void CopySaveToWRAM() {  // 8ccfbb
   hud_palette = 0;
 }
 
+static bool Text_AtKeyWait();
+// Set by a B press while a box is typing: write the rest of it at once.
+static bool g_text_fill;
+
 void RenderText() {  // 8ec440
-  kMessaging_Text[messaging_module]();
+  // Faster dialog, after the "Relic of the Past" launcher: holding A runs the
+  // text engine twice per frame, and B writes the rest of the box at once
+  // (that press doesn't also advance it). The engine is stepped more than once
+  // per frame but stops at every key wait, so nothing is skipped.
+  if (!(enhanced_features0 & kFeatures0_FastDialog) || main_module_index != 14 || messaging_module != 1) {
+    kMessaging_Text[messaging_module]();
+    return;
+  }
+  if (text_render_state == 3 && (filtered_joypad_H & 0x80) && !Text_AtKeyWait()) {
+    g_text_fill = true;
+    filtered_joypad_H &= ~0xc0;
+    filtered_joypad_L &= ~0xc0;
+  }
+  int steps = g_text_fill ? 240 : (joypad1L_last & 0x80) ? 2 : 1;
+  while (steps-- > 0) {
+    uint8 state_before = text_render_state;
+    kMessaging_Text[messaging_module]();
+    if (main_module_index != 14 || messaging_module != 1 || Text_AtKeyWait())
+      break;
+    // The border stages queue an upload for this frame's NMI; the next stage
+    // would overwrite it before it's shown.
+    if (state_before <= 1 && nmi_load_bg_from_vram)
+      break;
+  }
+  if (g_text_fill && (main_module_index != 14 || messaging_module != 1 || Text_AtKeyWait()))
+    g_text_fill = false;
 }
 
 void RenderText_PostDeathSaveOptions() {  // 8ec455
@@ -2378,6 +2407,25 @@ void RenderText_Draw_BorderIncremental() {  // 8ec919
 void RenderText_Draw_CharacterTilemap() {  // 8ec97d
   Text_BuildCharacterTilemap();
   text_render_state++;
+}
+
+// True when the text engine is waiting for the player (next page, end of the
+// message, or a choice).
+static bool Text_AtKeyWait() {
+  if (text_render_state != 3)
+    return false;
+  uint32 cmd = Text_DecodeCmd(messaging_text_buffer[dialogue_msg_read_pos],
+      &messaging_text_buffer[dialogue_msg_read_pos + 1]);
+  switch (TEXTCMD_CMD(cmd)) {
+  case kTextCmd_Choose: case kTextCmd_Item: case kTextCmd_Selchg: case kTextCmd_Choose3:
+  case kTextCmd_Choose2: case kTextCmd_Waitkey: case kTextCmd_EndMessage:
+    return true;
+  }
+  return false;
+}
+
+bool Text_IsWaitingForPlayer() {
+  return main_module_index == 14 && messaging_module == 1 && Text_AtKeyWait();
 }
 
 void RenderText_Draw_MessageCharacters() {  // 8ec984

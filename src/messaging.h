@@ -94,6 +94,8 @@ void ToggleStarTilesAndAdvance();
 void Death_InitializeGameOverLetters();
 void CopySaveToWRAM();
 void RenderText();
+// True while a message box waits for the player (next page, end, or a choice).
+bool Text_IsWaitingForPlayer();
 void RenderText_PostDeathSaveOptions();
 void Text_Initialize();
 void Text_Initialize_initModuleStateLoop();

@@ -1,3 +1,4 @@
+#include "haptics.h"
 #include "sprite_main.h"
 #include "sprite.h"
 #include "tagalong.h"
@@ -18049,6 +18050,7 @@ void Sprite_ScheduleBossForDeath(int k) {  // 9ddc16
   sprite_state[k] = 4;
   sprite_A[k] = 0;
   sprite_delay_main[k] = 224;
+  Haptic_Event(kHaptic_Environment, kHapticEnv_BossDefeated);
 }
 
 void Sprite_MakeBossExplosion(int k) {  // 9ddc2a

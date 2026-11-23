@@ -1,3 +1,4 @@
+#include "haptics.h"
 #include "player.h"
 #include "zelda_rtl.h"
 #include "variables.h"
@@ -162,6 +163,7 @@ void Link_ControlHandler() {  // 87807f
         if (countdown_for_blink == 0)
           countdown_for_blink = 58;
         Ancilla_Sfx2_Near(38);
+        Haptic_Event(kHaptic_DamageTaken, dmg);
         number_of_times_hurt_by_sprites++;
         uint8 new_dmg = link_health_current - dmg;
         if (new_dmg == 0 || new_dmg >= 0xa8) {
@@ -975,6 +977,7 @@ void Link_HoppingHorizontally_FindTile_Y() {  // 878b9b
 }
 
 void Link_SetToDeepWater() {  // 878c44
+  Haptic_Event(kHaptic_Environment, kHapticEnv_EnterWater);
   link_is_in_deep_water = 1;
   link_some_direction_bits = link_direction_last;
   Link_ResetSwimmingState();
@@ -1503,6 +1506,7 @@ endif_1:
     link_incapacitated_timer = 0;
     link_auxiliary_state = 0;
     Ancilla_Sfx3_Near(31);
+    Haptic_Event(kHaptic_Environment, kHapticEnv_FallIntoPit);
   }
 
   link_cant_change_direction = 0;
@@ -2022,6 +2026,10 @@ void Link_HandleYItem() {  // 879b0e
   if (current_item_active == 5 || current_item_active == 6)
     eq_selected_rod = current_item_active - 5 + 1;
 
+  // The bow rumbles when the arrow actually leaves (AncillaAdd_Arrow).
+  if (current_item_active != 0 && current_item_active != 3 && (filtered_joypad_H & kJoypadH_Y))
+    Haptic_Event(kHaptic_ItemUsed, current_item_active);
+
   switch (current_item_active) {
   case 0:
     break;
@@ -2167,6 +2175,7 @@ void Link_CheckForSwordSwing() {  // 879cd9
     }
     button_mask_b_y |= 0x80;
     HandleSwordSfxAndBeam();
+    Haptic_Event(kHaptic_SwordSwing, 0);
     link_cant_change_direction |= 1;
     link_animation_steps = 0;
   }
@@ -2189,6 +2198,7 @@ void Link_CheckForSwordSwing() {  // 879cd9
     } else if (button_b_frames >= 4 && (button_mask_b_y & 1) && (joypad1H_last & kJoypadH_B)) {
       button_mask_b_y &= ~1;
       HandleSwordSfxAndBeam();
+      Haptic_Event(kHaptic_SwordSwing, 1);
       return;
     }
   }
@@ -3809,6 +3819,7 @@ void Link_PerformOpenChest() {  // 87b574
   }
   assert(chest_position != -1);
   item_receipt_method = 1;
+  Haptic_Event(kHaptic_Environment, kHapticEnv_ChestOpen);
   uint8 alt = kReceiveItemAlternates[item];
   if (alt != 0xff) {
     uint16 ram_addr = kMemoryLocationToGiveItemTo[item];
@@ -5101,6 +5112,7 @@ void StartMovementCollisionChecks_X_HandleOutdoors() {  // 87c8e9
 
   if ((detection_of_ledge_tiles_horiz_uphoriz & 7) != 0 && RunLedgeHopTimer()) {
     Ancilla_Sfx2_Near(0x20);
+    Haptic_Event(kHaptic_Environment, kHapticEnv_LandFromLedge);
     link_actual_vel_x = (link_last_direction_moved_towards & 1) ? 0x10 : -0x10;
     Link_CancelDash();
     link_auxiliary_state = 2;

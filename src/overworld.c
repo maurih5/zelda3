@@ -1,3 +1,4 @@
+#include "haptics.h"
 #include "overworld.h"
 #include "hud.h"
 #include "load_gfx.h"
@@ -1307,6 +1308,7 @@ void Module09_MirrorWarp() {  // 82b1fa
 }
 
 void MirrorWarp_FinalizeAndLoadDestination() {  // 82b260
+  Haptic_Event(kHaptic_Environment, kHapticEnv_MirrorWarp);
   HdmaSetup(0, 0xf2fb, 0x41, 0, (uint8)WH0, 0);
   IrisSpotlight_ResetTable();
   palette_filter_countdown = 0;

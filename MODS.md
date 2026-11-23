@@ -64,3 +64,28 @@ Tools. It expects the SDL2 development package (VC) extracted to
 - [#261](https://github.com/snesrev/zelda3/issues/261): new `Quit` command to
   close the game from a key or gamepad combo.
 - Rewind now restores the PPU registers, so the background rewinds too.
+
+## Ideas from Relic of the Past
+Some features of the [Relic of the Past](https://github.com/drizztdourden08/relic-of-the-past)
+launcher (MIT), reimplemented natively. All of them are in the in-game Options tab.
+
+- **Edge effect**: in widescreen, the black side bars outside the current room or
+  area are filled with a blurred, darkened mirror of the scene.
+- **Rumble**: the gamepad vibrates on sword swings and hits, damage taken, items,
+  bombs, chests, pits, ledges, deep water, mirror warps and defeated bosses.
+- **Fast dialog**: hold A to type text at double speed; B writes the rest of the
+  box at once (without also advancing it).
+- **Turbo speed**, **stick dead zone** and a **3:2** aspect ratio
+  ([#311](https://github.com/snesrev/zelda3/issues/311)).
+
+```ini
+[Graphics]
+EdgeEffect = 1
+[General]
+Rumble = 70           # 0-100, 0 = off
+StickDeadzone = 30    # percent
+TurboSpeed = 0        # 2-16 = that many times faster, 0 = as fast as possible
+ExtendedAspectRatio = 3:2
+[Features]
+FastDialog = 1
+```
