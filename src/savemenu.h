@@ -40,6 +40,8 @@ void SaveMenu_OnFramePlayed();
 void SaveMenu_OnManualSave(int slot);
 void SaveMenu_OnQuit();
 void SaveMenu_ShowToast(const char *msg);
+// Shows a message with a progress bar (permille 0..1000); NULL hides it.
+void SaveMenu_SetProgress(const char *msg, int permille);
 
 bool SaveMenu_IsOpen();
 void SaveMenu_Toggle();

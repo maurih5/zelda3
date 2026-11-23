@@ -82,6 +82,7 @@ typedef struct Config {
   bool wide_hud;           // widescreen: HUD at the sides of the picture
   int rumble_intensity;    // 0-100, 0 = off
   int stick_deadzone;      // percent of the stick range
+  int save_hold_ms;        // hold the save state key this long to save, 0 = instant
   int turbo_speed;         // game frames per shown frame while Turbo is held, 0 = as fast as possible
 
   const char *link_graphics;

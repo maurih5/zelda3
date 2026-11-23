@@ -134,6 +134,12 @@ static void HandleGamepadInput(int button, bool pressed);
 static void HandleGamepadAxisInput(int gamepad_id, int axis, int value);
 static void OpenOneGamepad(int i);
 static void HandleVolumeAdjustment(int volume_adjustment);
+static void UpdateSaveHold();
+static void SaveHoldMessage(char *buf, size_t n);
+static int g_save_hold_slot = -1;
+static int g_save_hold_key, g_save_hold_button;
+static uint32 g_save_hold_start;
+static int g_save_hold_done;  // completed hold saves (for the selftest)
 static void LoadAssets();
 static void SwitchDirectory();
 
@@ -609,6 +615,8 @@ int main(int argc, char** argv) {
       }
     }
 
+    UpdateSaveHold();
+
     // Audio is muted while rewinding.
     bool want_audio_paused = g_paused || g_rewinding || SaveMenu_IsOpen();
     if (want_audio_paused != audiopaused) {
@@ -756,6 +764,12 @@ int main(int argc, char** argv) {
             for (int i = 0; i < 12; i++)
               if (strcmp(name, kBtn[i]) == 0 && f >= a && f <= b)
                 inputs |= 1 << i;
+          } else if (sscanf(tok, "holdbar@%d", &a) == 1 && f == a) {
+            g_save_hold_slot = 3;  // show the hold-to-save bar at 60%
+            char msg[96];
+            SaveHoldMessage(msg, sizeof(msg));
+            SaveMenu_SetProgress(msg, 600);
+            g_save_hold_slot = -1;
           } else if (sscanf(tok, "kill@%d", &a) == 1 && f == a) {
             link_give_damage = 0xa0;  // more than any health
           } else if (sscanf(tok, "dump:%40[^@]@%d", name, &a) == 2 && f == a) {
@@ -945,7 +959,7 @@ int main(int argc, char** argv) {
         printf("Volumen %d -> %d\n", vol0, g_config.volume);
         SelftestCheck(g_config.volume == vol0 - 20, "izquierda baja el volumen");
         SDL_LockMutex(g_audio_mutex);
-        for (int i = 0; i < 21; i++) SaveMenu_Input(kSaveMenu_Down);
+        for (int i = 0; i < 22; i++) SaveMenu_Input(kSaveMenu_Down);
         uint32 feat0 = g_config.features0;
         SaveMenu_Input(kSaveMenu_Ok);
         SDL_UnlockMutex(g_audio_mutex);
@@ -953,7 +967,7 @@ int main(int argc, char** argv) {
                       (g_wanted_zelda_features & kFeatures0_TurnWhileDashing), "A activa 'Girar al correr'");
         SelftestDumpMenu("selftest_opt2.bmp");
         SDL_LockMutex(g_audio_mutex);
-        for (int i = 0; i < 18; i++) SaveMenu_Input(kSaveMenu_Up);
+        for (int i = 0; i < 19; i++) SaveMenu_Input(kSaveMenu_Up);
         SaveMenu_Input(kSaveMenu_Ok);  // Shader (needs OpenGL)
         SDL_UnlockMutex(g_audio_mutex);
         SelftestDumpMenu("selftest_opt3.bmp");
@@ -1002,6 +1016,33 @@ int main(int argc, char** argv) {
           while (fgets(line, sizeof(line), of)) printf("  | %s", line);
           fclose(of);
         }
+      }
+      if (f == 2750) {
+        // Hold-to-save: releasing early cancels, holding saves after the delay.
+        int saved_ms = g_config.save_hold_ms;
+        g_config.save_hold_ms = 1000;
+        int done0 = g_save_hold_done;
+        HandleInput(SDLK_F4, KMOD_SHIFT, true);
+        SelftestCheck(g_save_hold_slot == 3, "Shift+F4 empieza a guardar en la ranura 4");
+        HandleInput(SDLK_F4, 0, false);
+        SelftestCheck(g_save_hold_slot < 0 && g_save_hold_done == done0, "soltar antes cancela el guardado");
+        uint32 t0 = SDL_GetTicks();
+        HandleInput(SDLK_F4, KMOD_SHIFT, true);
+        while (g_save_hold_done == done0 && SDL_GetTicks() - t0 < 4000) {
+          SDL_Delay(20);
+          UpdateSaveHold();
+        }
+        uint32 dt = SDL_GetTicks() - t0;
+        printf("Guardado manteniendo: %u ms\n", dt);
+        SelftestCheck(g_save_hold_done == done0 + 1 && dt >= 980 && dt < 1500, "mantener 1 s guarda una vez");
+        HandleInput(SDLK_F4, 0, false);  // release after saving: no cancel message, nothing else
+        SelftestCheck(g_save_hold_done == done0 + 1 && g_save_hold_slot < 0, "soltar despues de guardar no hace nada");
+        { FILE *sf = fopen("saves/save3.sav", "rb"); SelftestCheck(sf != NULL, "se escribio saves/save3.sav"); if (sf) fclose(sf); }
+        g_config.save_hold_ms = 0;
+        int before = g_save_hold_done;
+        HandleInput(SDLK_F4, KMOD_SHIFT, true);
+        SelftestCheck(g_save_hold_slot < 0 && g_save_hold_done == before, "con 0 guarda al instante (sin espera)");
+        g_config.save_hold_ms = saved_ms;
       }
       if (f == 2800) {
         printf("Al salir: modulo 0x%02X, submodulo %d\n", main_module_index, submodule_index);
@@ -1380,10 +1421,69 @@ static void HandleSaveMenuGamepad(int button) {
   }
 }
 
+// Hold-to-save: a save state key/button must be held for save_hold_ms before
+// the state is written, so a slot isn't overwritten by an accidental press.
+
+static void SaveHoldMessage(char *buf, size_t n) {
+  snprintf(buf, n, "Guardando en ranura %d... soltá para cancelar", g_save_hold_slot + 1);
+}
+
+static bool StartSaveHold(int cmd, int key, int button) {
+  if (cmd < kKeys_Save || cmd > kKeys_Save_Last || g_config.save_hold_ms <= 0)
+    return false;
+  g_save_hold_slot = cmd - kKeys_Save;
+  g_save_hold_key = key;
+  g_save_hold_button = button;
+  g_save_hold_start = SDL_GetTicks();
+  char msg[96];
+  SaveHoldMessage(msg, sizeof(msg));
+  SaveMenu_SetProgress(msg, 0);
+  return true;
+}
+
+static void CancelSaveHold(bool toast) {
+  if (g_save_hold_slot < 0)
+    return;
+  g_save_hold_slot = -1;
+  SaveMenu_SetProgress(NULL, 0);
+  if (toast)
+    SaveMenu_ShowToast("Guardado cancelado");
+}
+
+static void UpdateSaveHold() {
+  if (g_save_hold_slot < 0)
+    return;
+  if (SaveMenu_IsOpen()) {
+    CancelSaveHold(false);
+    return;
+  }
+  uint32 elapsed = SDL_GetTicks() - g_save_hold_start;
+  int total = g_config.save_hold_ms > 0 ? g_config.save_hold_ms : 1;
+  if (elapsed < (uint32)total) {
+    char msg[96];
+    SaveHoldMessage(msg, sizeof(msg));
+    SaveMenu_SetProgress(msg, (int)(elapsed * 1000 / total));
+    return;
+  }
+  int slot = g_save_hold_slot;
+  g_save_hold_slot = -1;
+  SaveMenu_SetProgress(NULL, 0);
+  HandleCommand(kKeys_Save + slot, true);
+  g_save_hold_done++;
+  char msg[64];
+  snprintf(msg, sizeof(msg), "Guardado en ranura %d", slot + 1);
+  SaveMenu_ShowToast(msg);
+}
+
 static void HandleInput(int keyCode, int keyMod, bool pressed) {
+  if (!pressed && g_save_hold_slot >= 0 && g_save_hold_key == keyCode)
+    CancelSaveHold(true);
   int j = FindCmdForSdlKey(keyCode, keyMod);
-  if (j != 0)
+  if (j != 0) {
+    if (pressed && StartSaveHold(j, keyCode, -1))
+      return;
     HandleCommand(j, pressed);
+  }
 }
 
 static void OpenOneGamepad(int i) {
@@ -1434,8 +1534,12 @@ static void HandleGamepadInput(int button, bool pressed) {
       return;
     }
   }
+  if (!pressed && g_save_hold_slot >= 0 && g_save_hold_button == button)
+    CancelSaveHold(true);
   if (pressed)
     g_gamepad_last_cmd[button] = FindCmdForGamepadButton(button, g_gamepad_modifiers);
+  if (pressed && StartSaveHold(g_gamepad_last_cmd[button], -1, button))
+    return;
   if (g_gamepad_last_cmd[button] != 0)
     HandleCommand(g_gamepad_last_cmd[button], pressed);
 }

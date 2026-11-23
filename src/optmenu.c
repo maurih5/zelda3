@@ -52,6 +52,7 @@ enum {
   kO_Rumble,
   kO_Deadzone,
   kO_TurboSpeed,
+  kO_SaveHold,
   kO_Feature,  // + index in kFeatureDefs
 };
 
@@ -107,6 +108,7 @@ static const OptDef kOptions[] = {
   { kT_Slider, kO_TurboSpeed, "Avance rápido", "Velocidad mientras mantenés la tecla de avance rápido." },
   { kT_Slider, kO_RewindSeconds, "Rebobinado", "Cuántos segundos se pueden rebobinar. Cambiarlo borra el historial actual." },
   { kT_Slider, kO_AutosaveMinutes, "Autoguardar cada", "Cada cuánto se guarda un state solo. Igual se guarda al salir y al entrar o salir de dungeons." },
+  { kT_Slider, kO_SaveHold, "Guardar state manteniendo", "Cuánto hay que mantener la tecla de guardar state para que guarde. Soltar antes cancela. 0 guarda al instante." },
   { kT_Slider, kO_AutosaveSlots, "Autoguardados", "Cuántos autoguardados se conservan en saves/auto. Con 0 se desactiva el autoguardado." },
   { kT_Header, 0, "Juego", NULL },
   { kT_Toggle, kO_Feature + 0, "Cambiar ítem con L/R", "L y R cambian el ítem equipado. En el inventario, mantené X, L o R para asignar ítems." },
@@ -298,6 +300,7 @@ static int GetValue(int id) {
   case kO_Rumble: return g_config.rumble_intensity;
   case kO_Deadzone: return g_config.stick_deadzone;
   case kO_TurboSpeed: return g_config.turbo_speed < 2 ? 1 : g_config.turbo_speed;
+  case kO_SaveHold: return g_config.save_hold_ms;
   case kO_Aspect: return CurrentAspect();
   default:
     if (id >= kO_Feature && id < kO_Feature + countof(kFeatureDefs))
@@ -314,6 +317,7 @@ static void SliderRange(int id, int *lo, int *hi, int *step) {
   if (id == kO_Rumble) *hi = 100, *step = 10;
   if (id == kO_Deadzone) *lo = 10, *hi = 60, *step = 5;
   if (id == kO_TurboSpeed) *lo = 1, *hi = 10, *step = 1;
+  if (id == kO_SaveHold) *hi = 5000, *step = 500;
 }
 
 static void FormatValue(int id, char *buf, size_t n) {
@@ -345,6 +349,11 @@ static void FormatValue(int id, char *buf, size_t n) {
   case kO_TurboSpeed:
     if (v <= 1) snprintf(buf, n, "Máxima");
     else snprintf(buf, n, "x%d", v);
+    break;
+  case kO_SaveHold:
+    if (v <= 0) snprintf(buf, n, "Al instante");
+    else if (v % 1000 == 0) snprintf(buf, n, "%d s", v / 1000);
+    else snprintf(buf, n, "%d,%d s", v / 1000, v % 1000 / 100);
     break;
   case kO_Aspect:
     snprintf(buf, n, "%s", kAspectNames[v]);
@@ -415,6 +424,10 @@ static void ChangeOption(int id, int dir) {
     case kO_TurboSpeed:
       g_config.turbo_speed = nv <= 1 ? 0 : nv;
       SaveInt("General", "TurboSpeed", g_config.turbo_speed);
+      break;
+    case kO_SaveHold:
+      g_config.save_hold_ms = nv;
+      SaveInt("General", "SaveHoldMs", nv);
       break;
     case kO_AutosaveSlots:
       g_config.autosave_slots = nv;

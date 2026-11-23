@@ -262,6 +262,18 @@ void SaveMenu_ShowToast(const char *msg) {
   ShowToast(msg);
 }
 
+static char g_progress_msg[96];
+static int g_progress = -1;
+
+void SaveMenu_SetProgress(const char *msg, int permille) {
+  if (!msg) {
+    g_progress = -1;
+    return;
+  }
+  snprintf(g_progress_msg, sizeof(g_progress_msg), "%s", msg);
+  g_progress = permille < 0 ? 0 : permille > 1000 ? 1000 : permille;
+}
+
 static bool DoAutosave(int kind, const char *exclude, bool toast) {
   if (g_sm.autosave_slots <= 0 || ZeldaIsReplaying())
     return false;
@@ -330,6 +342,19 @@ void SaveMenu_CaptureFrame(const uint8 *pixels, int pitch, int scale, int width,
 }
 
 void SaveMenu_DrawOverlay(uint8 *pixels, int pitch, int scale, int width, int height) {
+  if (g_progress >= 0) {
+    Canvas c = { pixels, pitch, scale, width, height };
+    int tw = MeasureText(g_progress_msg);
+    int bw = tw + 16, bh = MENU_FONT_HEIGHT + 12;
+    int x = width - bw - 8, y = height - bh - 8;
+    FillRect(&c, x, y, bw, bh, kCol_Panel, 224);
+    DrawFrame(&c, x, y, bw, bh, kCol_Gold);
+    DrawText(&c, x + 8, y + 3, g_progress_msg, kCol_White, -1);
+    int barw = bw - 16;
+    FillRect(&c, x + 8, y + bh - 7, barw, 3, kCol_HeartEmpty, 256);
+    FillRect(&c, x + 8, y + bh - 7, barw * g_progress / 1000, 3, kCol_Gold, 256);
+    return;
+  }
   if (g_sm.toast_frames <= 0)
     return;
   g_sm.toast_frames--;

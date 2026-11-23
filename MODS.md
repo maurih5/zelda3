@@ -26,10 +26,15 @@ state, each with a thumbnail. **Escape** / **View+Start** opens a menu over the
 game to choose which autosave or manual slot to load. Loading keeps the in-game
 save (SRAM).
 
+Saving to a manual slot (Shift+F1..F10, View+RB) needs the key held for a
+moment (1 s by default, with a progress bar), so a slot is not overwritten by
+an accidental press; releasing early cancels. `SaveHoldMs = 0` saves at once.
+
 ```ini
 [General]
 AutosaveMinutes = 5   # 0 = only on quit / dungeon changes
 AutosaveSlots = 10    # 0 disables autosave
+SaveHoldMs = 1000     # hold time to save a state, 0-5000 ms
 
 [KeyMap]
 SaveMenu = Escape

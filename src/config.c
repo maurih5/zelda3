@@ -530,6 +530,9 @@ static bool HandleIniConfig(int section, const char *key, char *value) {
     } else if (StringEqualsNoCase(key, "StickDeadzone")) {
       g_config.stick_deadzone = IntMin(IntMax(atoi(value), 5), 90);
       return true;
+    } else if (StringEqualsNoCase(key, "SaveHoldMs")) {
+      g_config.save_hold_ms = IntMin(IntMax(atoi(value), 0), 5000);
+      return true;
     } else if (StringEqualsNoCase(key, "TurboSpeed")) {
       g_config.turbo_speed = IntMin(IntMax(atoi(value), 0), 16);
       return true;
@@ -703,6 +706,7 @@ void ParseConfigFile(const char *filename) {
   g_config.rumble_intensity = 70;
   g_config.stick_deadzone = 30;
   g_config.turbo_speed = 0;
+  g_config.save_hold_ms = 1000;
   SetDefaultKeys();
 
   if (filename != NULL || !ParseOneConfigFile("zelda3.user.ini", 0)) {
