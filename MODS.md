@@ -53,3 +53,14 @@ read after `zelda3.ini`, so your `zelda3.ini` is never rewritten.
 `build_msvc.bat [out.exe] [extra defines]` builds with the Visual Studio Build
 Tools. It expects the SDL2 development package (VC) extracted to
 `third_party/SDL2-2.26.5`.
+
+## Fixes for upstream issues
+- [#328](https://github.com/snesrev/zelda3/issues/328): bow, rods, hammer and
+  Cane of Somaria could lock Link in an animation loop (out-of-bounds read).
+- [#331](https://github.com/snesrev/zelda3/issues/331): analog stick overflow
+  with the stick fully in a corner.
+- [#295](https://github.com/snesrev/zelda3/issues/295): cheats have no keys by
+  default.
+- [#261](https://github.com/snesrev/zelda3/issues/261): new `Quit` command to
+  close the game from a key or gamepad combo.
+- Rewind now restores the PPU registers, so the background rewinds too.
