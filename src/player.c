@@ -2273,7 +2273,8 @@ void Player_Sword_SpinAttackJerks_HoldDown() {  // 879d9f
 }
 
 void LinkItem_Rod() {  // 879eef
-  static const uint8 kRodAnimDelays[] = { 3, 3, 5 };
+  // The 4th entry is read when the animation ends (the value is then overwritten).
+  static const uint8 kRodAnimDelays[] = { 3, 3, 5, 0 };
   if (!(button_mask_b_y & 0x40)) {
     if (is_standing_in_doorway || !CheckYButtonPress())
       return;
@@ -2308,7 +2309,8 @@ out:
 }
 
 void LinkItem_Hammer() {  // 879f7b
-  static const uint8 kHammerAnimDelays[] = { 3, 3, 16 };
+  // The 4th entry is read when the animation ends (the value is then overwritten).
+  static const uint8 kHammerAnimDelays[] = { 3, 3, 16, 0 };
   if (link_item_in_hand & 0x10)
     return;
   if (!(button_mask_b_y & 0x40)) {
@@ -2346,7 +2348,8 @@ void LinkItem_Hammer() {  // 879f7b
 }
 
 void LinkItem_Bow() {  // 87a006
-  static const uint8 kBowDelays[] = { 3, 3, 8 };
+  // The 4th entry is read when the animation ends (the value is then overwritten).
+  static const uint8 kBowDelays[] = { 3, 3, 8, 0 };
 
   if (!(button_mask_b_y & 0x40)) {
     if (is_standing_in_doorway || !CheckYButtonPress())
@@ -3306,7 +3309,8 @@ void Player_CheckHandleCapeStuff() {  // 87ae8f
 }
 
 void LinkItem_CaneOfSomaria() {  // 87aec0
-  static const uint8 kRodAnimDelays[] = { 3, 3, 5 };
+  // The 4th entry is read when the animation ends (the value is then overwritten).
+  static const uint8 kRodAnimDelays[] = { 3, 3, 5, 0 };
   if (!(button_mask_b_y & 0x40)) {
     if (player_on_somaria_platform || is_standing_in_doorway || !CheckYButtonPress())
       return;
