@@ -118,7 +118,7 @@ static const OptDef kOptions[] = {
   { kT_Toggle, kO_Feature + 4, "Agarrar con la espada", "Agarrá corazones, rupias y demás tocándolos con la espada." },
   { kT_Toggle, kO_Feature + 5, "Romper vasijas con espada", "Con la espada nivel 2 o más se pueden romper vasijas." },
   { kT_Toggle, kO_Feature + 6, "Sin pitido de vida baja", "Quita el pitido que suena cuando te queda poca vida." },
-  { kT_Toggle, kO_Feature + 7, "Saltar intro", "Saltea la intro al apretar un botón." },
+  { kT_Toggle, kO_Feature + 7, "Saltar intro", "Cualquier botón saltea la intro desde el arranque y va directo a elegir partida." },
   { kT_Toggle, kO_Feature + 8, "Máximos en amarillo", "Muestra en amarillo las rupias, bombas y flechas al máximo." },
   { kT_Toggle, kO_Feature + 9, "Más bombas a la vez", "Permite tener cuatro bombas activas en vez de dos." },
   { kT_Toggle, kO_Feature + 10, "Hasta 9999 rupias", "La billetera llega a 9999 rupias en vez de 999." },

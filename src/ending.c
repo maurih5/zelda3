@@ -504,9 +504,21 @@ void Polyhedral_InitializeThread() {  // 89f7de
 }
 
 void Module00_Intro() {  // 8cc120
-  uint8 skip_at = enhanced_features0 & kFeatures0_SkipIntroOnKeypress ? 4 : 8;
-
-  if (submodule_index >= skip_at && ((filtered_joypad_L & 0xc0 | filtered_joypad_H) & 0xd0)) {
+  if (enhanced_features0 & kFeatures0_SkipIntroOnKeypress) {
+    // Any button (A B X Y L R Select Start) skips to the file select. A press
+    // during the first half second, while the game data is still being set up,
+    // is kept and acted on as soon as that is done.
+    static bool skip_pending;
+    if (submodule_index == 0)
+      skip_pending = false;
+    if ((filtered_joypad_L | filtered_joypad_H) & 0xf0)
+      skip_pending = true;
+    if (submodule_index >= 2 && skip_pending) {
+      skip_pending = false;
+      FadeMusicAndResetSRAMMirror();
+      return;
+    }
+  } else if (submodule_index >= 8 && ((filtered_joypad_L & 0xc0 | filtered_joypad_H) & 0xd0)) {
     FadeMusicAndResetSRAMMirror();
     return;
   }
