@@ -37,6 +37,7 @@ enum {
   kKeys_VolumeDown,
   kKeys_Rewind,
   kKeys_SaveMenu,
+  kKeys_Quit,
   kKeys_Total,
 };
 

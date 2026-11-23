@@ -721,6 +721,14 @@ int main(int argc, char** argv) {
                kb, gp, start, save, kKeys_SaveMenu, kKeys_Controls + 5, kKeys_Save);
         SelftestCheck(kb == kKeys_SaveMenu && gp == kKeys_SaveMenu && start == kKeys_Controls + 5 && save == kKeys_Save,
                       "mapeo de Escape / View+Start / Start / View+RB");
+        // #331: stick fully in a corner must still give a direction.
+        HandleGamepadAxisInput(0, SDL_CONTROLLER_AXIS_LEFTX, -32768);
+        HandleGamepadAxisInput(0, SDL_CONTROLLER_AXIS_LEFTY, -32768);
+        printf("Stick arriba-izquierda a fondo -> botones %02x\n", g_gamepad_buttons);
+        SelftestCheck(g_gamepad_buttons == (1 << 4 | 1 << 6), "stick a fondo en diagonal (sin overflow)");
+        HandleGamepadAxisInput(0, SDL_CONTROLLER_AXIS_LEFTX, 0);
+        HandleGamepadAxisInput(0, SDL_CONTROLLER_AXIS_LEFTY, 0);
+        SelftestCheck(g_gamepad_buttons == 0, "stick centrado");
         HandleCommand(kKeys_Load + 0, true);
         HandleCommand(kKeys_ClearKeyLog, true);
         SaveMenu_SelftestSetInterval(300);
@@ -906,7 +914,8 @@ int main(int argc, char** argv) {
       if (f == 2800) {
         printf("Al salir: modulo 0x%02X, submodulo %d\n", main_module_index, submodule_index);
         printf("SAVEMENU SELFTEST %s (%d fallas)\n", g_st_failures ? "FAIL" : "PASS", g_st_failures);
-        running = false;
+        fflush(stdout);
+        HandleCommand(kKeys_Quit, true);  // must end the main loop through SDL_QUIT
       }
       g_st_frame++;
     }
@@ -1154,6 +1163,12 @@ static void HandleCommand_Locked(uint32 j, bool pressed) {
     case kKeys_ToggleRenderer: g_ppu_render_flags ^= kPpuRenderFlags_NewRenderer; break;
     case kKeys_VolumeUp:
     case kKeys_VolumeDown: HandleVolumeAdjustment(j == kKeys_VolumeUp ? 1 : -1); break;
+    case kKeys_Quit: {
+      // Same as closing the window (autosaves on the way out).
+      SDL_Event ev = { .type = SDL_QUIT };
+      SDL_PushEvent(&ev);
+      break;
+    }
     default: assert(0);
     }
   }
@@ -1369,7 +1384,8 @@ static void HandleGamepadAxisInput(int gamepad_id, int axis, int value) {
     }
     *(axis == SDL_CONTROLLER_AXIS_LEFTX ? &last_x : &last_y) = value;
     int buttons = 0;
-    if (last_x * last_x + last_y * last_y >= 10000 * 10000) {
+    // 64-bit: with the stick fully in a corner x*x + y*y doesn't fit in an int.
+    if ((int64)last_x * last_x + (int64)last_y * last_y >= 10000 * 10000) {
       // in the non deadzone part, divide the circle into eight 45 degree
       // segments rotated by 22.5 degrees that control which direction to move.
       // todo: do this without floats?

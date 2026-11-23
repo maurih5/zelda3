@@ -144,6 +144,7 @@ static const CtlDef kControls[] = {
   { 0, kKeys_WindowSmaller, "Ventana más chica" },
   { 0, kKeys_DisplayPerf, "Mostrar FPS" },
   { 0, kKeys_Reset, "Reiniciar el juego" },
+  { 0, kKeys_Quit, "Salir del juego" },
   { 1, 0, "Más ranuras de states" },
   { 0, kKeys_Save + 1, "Guardar state 2" },
   { 0, kKeys_Load + 1, "Cargar state 2" },
