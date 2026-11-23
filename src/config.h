@@ -35,6 +35,7 @@ enum {
   kKeys_VolumeUp,
   kKeys_VolumeDown,
   kKeys_Rewind,
+  kKeys_SaveMenu,
   kKeys_Total,
 };
 
@@ -71,6 +72,8 @@ typedef struct Config {
   uint32 features0;
   int rewind_seconds;
   int rewind_frame_interval;
+  int autosave_minutes;
+  int autosave_slots;
 
   const char *link_graphics;
   char *memory_buffer;

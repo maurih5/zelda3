@@ -1126,6 +1126,58 @@ void SaveLoadSlot(int cmd, int which) {
   }
 }
 
+bool ZeldaSaveStateFile(const char *path) {
+  if (state_recorder.replay_mode)
+    return false;
+  FILE *f = fopen(path, "wb");
+  if (!f)
+    return false;
+  StateRecorder_Save(&state_recorder, f);
+  bool ok = (ferror(f) == 0);
+  ok &= (fclose(f) == 0);
+  return ok;
+}
+
+// Loads a snapshot written by ZeldaSaveStateFile/SaveLoadSlot. With |keep_sram|
+// the in-game save file (SRAM) is left as it is now.
+bool ZeldaLoadStateFile(const char *path, bool keep_sram) {
+  FILE *f = fopen(path, "rb");
+  if (!f)
+    return false;
+  uint32 hdr[8] = { 0 };
+  bool valid = fread(hdr, 1, sizeof(hdr), f) == sizeof(hdr) && hdr[0] == 1;
+  if (valid) {
+    // Make sure the file is complete, StateRecorder_Load dies on short reads.
+    uint64 need = sizeof(hdr) + (uint64)hdr[2] + ((hdr[5] & 1) ? 2 * (uint64)hdr[6] : hdr[6]);
+    fseek(f, 0, SEEK_END);
+    long len = ftell(f);
+    valid = len >= 0 && (uint64)len >= need;
+  }
+  if (!valid) {
+    fclose(f);
+    return false;
+  }
+  fseek(f, 0, SEEK_SET);
+  static uint8 sram_backup[0x2000];
+  memcpy(sram_backup, g_zenv.sram, 0x2000);
+  ZeldaRewindClear();
+  StateRecorder_Load(&state_recorder, f, false);
+  fclose(f);
+  if (keep_sram) {
+    // Keep the save files, but take the active file slot (0x1ffe) from the state
+    // so that saving in-game writes to the file this state belongs to.
+    uint16 active_slot = WORD(g_zenv.sram[0x1ffe]);
+    memcpy(g_zenv.sram, sram_backup, 0x2000);
+    WORD(g_zenv.sram[0x1ffe]) = active_slot;
+    EmuSynchronizeWholeState();
+  }
+  return true;
+}
+
+bool ZeldaIsReplaying() {
+  return state_recorder.replay_mode;
+}
+
 typedef struct StateRecoderMultiPatch {
   uint32 count;
   uint32 addr;

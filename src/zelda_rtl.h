@@ -77,6 +77,11 @@ void ZeldaRewindFinish();      // call when the rewind key is released
 void ZeldaRewindClear();
 void ZeldaRewindGetStats(int *num_states, size_t *bytes);
 
+// Snapshots at arbitrary paths (used by the save menu / autosave)
+bool ZeldaSaveStateFile(const char *path);
+bool ZeldaLoadStateFile(const char *path, bool keep_sram);
+bool ZeldaIsReplaying();
+
 typedef void ZeldaRunFrameFunc(uint16 input, int run_what);
 typedef void ZeldaSyncAllFunc();
 

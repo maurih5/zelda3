@@ -26,8 +26,80 @@
 #include "load_gfx.h"
 #include "util.h"
 #include "audio.h"
+#include "savemenu.h"
 
 static bool g_run_without_emu = 0;
+
+#ifdef SAVEMENU_SELFTEST
+void SaveMenu_SelftestSetInterval(int frames);
+const char *SaveMenu_SelftestSelectedPath();
+int SaveMenu_SelftestNumEntries();
+static int g_st_frame, g_st_dump_frame, g_st_toast_dump_at = -1, g_st_failures;
+static struct { char path[64]; uint32 hash; } g_st_saves[128];
+static int g_st_nsaves;
+
+static uint32 SelftestHashGame() {
+  uint32 h = 2166136261u;
+  for (int i = 0; i < 0x20000; i++) {
+    if (i == 0x654 || (i >= 0x1DB20 && i < 0x1DBA0))
+      continue;  // msu state, depends on audio thread timing
+    h = (h ^ g_ram[i]) * 16777619u;
+  }
+  return h;
+}
+
+static uint32 SelftestHashSram() {
+  uint32 h = 2166136261u;
+  for (int i = 0; i < 0x1ffe; i++)
+    h = (h ^ g_zenv.sram[i]) * 16777619u;
+  return h;
+}
+
+void SelftestRecordSave(const char *path) {
+  int i = 0;
+  while (i < g_st_nsaves && strcmp(g_st_saves[i].path, path) != 0)
+    i++;
+  if (i == g_st_nsaves) {
+    if (g_st_nsaves == 128) return;
+    g_st_nsaves++;
+  }
+  snprintf(g_st_saves[i].path, sizeof(g_st_saves[i].path), "%s", path);
+  g_st_saves[i].hash = SelftestHashGame();
+  if (g_st_toast_dump_at < 0)
+    g_st_toast_dump_at = g_st_frame + 40;
+}
+
+static void SelftestWriteBmp(const char *name, const uint8 *px, int pitch, int w, int h) {
+  FILE *f = fopen(name, "wb");
+  if (!f) return;
+  uint32 img = w * h * 4;
+  uint8 hdr[54] = { 'B', 'M' };
+  *(uint32 *)(hdr + 2) = 54 + img;
+  *(uint32 *)(hdr + 10) = 54;
+  *(uint32 *)(hdr + 14) = 40;
+  *(int32 *)(hdr + 18) = w;
+  *(int32 *)(hdr + 22) = -h;  // top-down
+  *(uint16 *)(hdr + 26) = 1;
+  *(uint16 *)(hdr + 28) = 32;
+  *(uint32 *)(hdr + 34) = img;
+  fwrite(hdr, 1, 54, f);
+  for (int y = 0; y < h; y++)
+    fwrite(px + (size_t)y * pitch, 4, w, f);
+  fclose(f);
+}
+
+static int g_snes_width, g_snes_height;  // tentative definition, defined below
+static void SelftestDumpMenu(const char *name) {
+  static uint8 buf[512 * 256 * 4];
+  SaveMenu_Draw(buf, g_snes_width * 4, g_snes_width, g_snes_height);
+  SelftestWriteBmp(name, buf, g_snes_width * 4, g_snes_width, g_snes_height);
+}
+
+static void SelftestCheck(bool ok, const char *what) {
+  printf("  [%s] %s\n", ok ? "OK" : "FALLA", what);
+  if (!ok) g_st_failures++;
+}
+#endif
 
 #ifdef REWIND_SELFTEST
 uint32 ZeldaSelftestRamHash();
@@ -46,6 +118,8 @@ static void LoadLinkGraphics();
 static void RenderNumber(uint8 *dst, size_t pitch, int n, bool big);
 static void HandleInput(int keyCode, int modCode, bool pressed);
 static void HandleCommand(uint32 j, bool pressed);
+static void HandleSaveMenuKey(int key, int mod);
+static void HandleSaveMenuGamepad(int button);
 static int RemapSdlButton(int button);
 static void HandleGamepadInput(int button, bool pressed);
 static void HandleGamepadAxisInput(int gamepad_id, int axis, int value);
@@ -78,6 +152,7 @@ static int g_sdl_audio_mixer_volume = SDL_MIX_MAXVOLUME;
 static struct RendererFuncs g_renderer_funcs;
 static uint32 g_gamepad_modifiers;
 static uint16 g_gamepad_last_cmd[kGamepadBtn_Count];
+static uint32 g_menu_last_stick;
 
 void NORETURN Die(const char *error) {
 #if defined(NDEBUG) && defined(_WIN32)
@@ -177,8 +252,16 @@ static void DrawPpuFrameWithPerf() {
   } else {
     ZeldaDrawPpuFrame(pixel_buffer, pitch, g_ppu_render_flags);
   }
+  SaveMenu_CaptureFrame(pixel_buffer, pitch, render_scale, g_snes_width, g_snes_height);
+  SaveMenu_DrawOverlay(pixel_buffer, pitch, render_scale, g_snes_width, g_snes_height);
   if (g_display_perf)
     RenderNumber(pixel_buffer + pitch * render_scale, pitch, g_curr_fps, render_scale == 4);
+#ifdef SAVEMENU_SELFTEST
+  if (g_st_dump_frame) {
+    g_st_dump_frame = 0;
+    SelftestWriteBmp("selftest_toast.bmp", pixel_buffer, pitch, g_snes_width * render_scale, g_snes_height * render_scale);
+  }
+#endif
   g_renderer_funcs.EndDraw();
 }
 
@@ -317,6 +400,7 @@ int main(int argc, char** argv) {
   ZeldaEnableMsu(g_config.enable_msu);
   ZeldaSetLanguage(g_config.language);
   ZeldaRewindConfigure(g_config.rewind_seconds, g_config.rewind_frame_interval);
+  SaveMenu_Init(g_config.autosave_minutes, g_config.autosave_slots);
 
   if (g_config.fullscreen == 1)
     g_win_flags ^= SDL_WINDOW_FULLSCREEN_DESKTOP;
@@ -424,6 +508,10 @@ int main(int argc, char** argv) {
       case SDL_CONTROLLERBUTTONDOWN:
       case SDL_CONTROLLERBUTTONUP: {
         int b = RemapSdlButton(event.cbutton.button);
+        if (b >= 0 && event.type == SDL_CONTROLLERBUTTONDOWN && SaveMenu_IsOpen()) {
+          HandleSaveMenuGamepad(b);
+          break;
+        }
         if (b >= 0)
           HandleGamepadInput(b, event.type == SDL_CONTROLLERBUTTONDOWN);
         break;
@@ -441,6 +529,11 @@ int main(int argc, char** argv) {
         }
         break;
       case SDL_KEYDOWN:
+        if (SaveMenu_IsOpen()) {
+          if (!event.key.repeat || event.key.keysym.sym == SDLK_UP || event.key.keysym.sym == SDLK_DOWN)
+            HandleSaveMenuKey(event.key.keysym.sym, event.key.keysym.mod);
+          break;
+        }
         HandleInput(event.key.keysym.sym, event.key.keysym.mod, true);
         break;
       case SDL_KEYUP:
@@ -453,10 +546,33 @@ int main(int argc, char** argv) {
     }
 
     // Audio is muted while rewinding.
-    if ((g_paused || g_rewinding) != audiopaused) {
-      audiopaused = g_paused || g_rewinding;
+    bool want_audio_paused = g_paused || g_rewinding || SaveMenu_IsOpen();
+    if (want_audio_paused != audiopaused) {
+      audiopaused = want_audio_paused;
       if (device)
         SDL_PauseAudioDevice(device, audiopaused);
+    }
+
+    if (SaveMenu_IsOpen()) {
+      // Analog stick navigation (edge triggered)
+      uint32 pad = g_gamepad_buttons;
+      uint32 pressed = pad & ~g_menu_last_stick;
+      g_menu_last_stick = pad;
+      SDL_LockMutex(g_audio_mutex);
+      if (pressed & (1 << 4)) SaveMenu_Input(kSaveMenu_Up);
+      if (pressed & (1 << 5)) SaveMenu_Input(kSaveMenu_Down);
+      SDL_UnlockMutex(g_audio_mutex);
+      if (SaveMenu_IsOpen()) {
+        uint8 *px = NULL;
+        int pitch = 0;
+        g_renderer_funcs.BeginDraw(g_snes_width, g_snes_height, &px, &pitch);
+        if (px)
+          SaveMenu_Draw(px, pitch, g_snes_width, g_snes_height);
+        g_renderer_funcs.EndDraw();
+      }
+      SDL_Delay(16);
+      lastTick = SDL_GetTicks();
+      continue;
     }
 
     if (g_paused) {
@@ -544,6 +660,97 @@ int main(int argc, char** argv) {
     }
 #endif
 
+#ifdef SAVEMENU_SELFTEST
+    {
+      static uint32 rng = 777, cur_in;
+      int f = g_st_frame;
+      if (f == 0 && getenv("ZELDA3_SELFTEST_SEED")) rng = atoi(getenv("ZELDA3_SELFTEST_SEED"));
+      if (f == 0) {
+        g_config.disable_frame_delay = true;
+        printf("SAVEMENU SELFTEST start\n");
+        int kb = FindCmdForSdlKey(SDLK_ESCAPE, 0);
+        int gp = FindCmdForGamepadButton(kGamepadBtn_Start, 1 << kGamepadBtn_Back | 1 << kGamepadBtn_Start);
+        int start = FindCmdForGamepadButton(kGamepadBtn_Start, 1 << kGamepadBtn_Start);
+        int save = FindCmdForGamepadButton(kGamepadBtn_R1, 1 << kGamepadBtn_Back | 1 << kGamepadBtn_R1);
+        printf("Mapeo: Escape->%d View+Start->%d Start solo->%d View+RB->%d (SaveMenu=%d Start=%d Save=%d)\n",
+               kb, gp, start, save, kKeys_SaveMenu, kKeys_Controls + 5, kKeys_Save);
+        SelftestCheck(kb == kKeys_SaveMenu && gp == kKeys_SaveMenu && start == kKeys_Controls + 5 && save == kKeys_Save,
+                      "mapeo de Escape / View+Start / Start / View+RB");
+        HandleCommand(kKeys_Load + 0, true);
+        HandleCommand(kKeys_ClearKeyLog, true);
+        SaveMenu_SelftestSetInterval(300);
+      }
+      if (f % 16 == 0) {
+        static const int kDirs[8] = { 1 << 4, 1 << 5, 1 << 6, 1 << 7, 1 << 4 | 1 << 7, 1 << 5 | 1 << 6, 0, 1 << 6 };
+        rng = rng * 1103515245 + 12345;
+        cur_in = kDirs[(rng >> 16) & 7] | (((rng >> 20) & 3) == 0 ? 1 : 0);
+      }
+      inputs = cur_in;
+      if (getenv("ZELDA3_SELFTEST_STILL")) inputs = 0;
+      if (f == g_st_toast_dump_at)
+        g_st_dump_frame = 1;
+      if (f == 2400) {
+        printf("Autosaves hechos: %d\n", g_st_nsaves);
+        SelftestCheck(g_st_nsaves >= 3, "se hicieron autoguardados periodicos");
+        HandleCommand(kKeys_SaveMenu, true);
+        SelftestCheck(SaveMenu_IsOpen(), "el menu abre");
+        printf("Entradas en el menu: %d\n", SaveMenu_SelftestNumEntries());
+        SelftestDumpMenu("selftest_menu1.bmp");
+        SDL_LockMutex(g_audio_mutex);
+        SaveMenu_Input(kSaveMenu_Down);
+        SaveMenu_Input(kSaveMenu_Down);
+        SDL_UnlockMutex(g_audio_mutex);
+        SelftestDumpMenu("selftest_menu2.bmp");
+        char path[64];
+        snprintf(path, sizeof(path), "%s", SaveMenu_SelftestSelectedPath());
+        uint32 expect = 0;
+        bool known = false;
+        for (int i = 0; i < g_st_nsaves; i++)
+          if (strcmp(g_st_saves[i].path, path) == 0) expect = g_st_saves[i].hash, known = true;
+        printf("Cargando %s\n", path);
+        uint32 sram_before = SelftestHashSram();
+        int nsaves_before = g_st_nsaves;
+        SDL_LockMutex(g_audio_mutex);
+        SaveMenu_Input(kSaveMenu_Ok);
+        SDL_UnlockMutex(g_audio_mutex);
+        SelftestCheck(!SaveMenu_IsOpen(), "el menu se cierra al cargar");
+        SelftestCheck(known && SelftestHashGame() == expect, "el estado cargado es identico al autoguardado");
+        SelftestCheck(SelftestHashSram() == sram_before, "la SRAM (partida del juego) no cambio");
+        SelftestCheck(g_st_nsaves >= nsaves_before, "se hizo el respaldo 'Antes de cargar'");
+      }
+      if (f == 2401) {
+        HandleCommand(kKeys_SaveMenu, true);
+        SelftestDumpMenu("selftest_menu3.bmp");
+        SDL_LockMutex(g_audio_mutex);
+        SaveMenu_Input(kSaveMenu_Back);
+        SDL_UnlockMutex(g_audio_mutex);
+        SelftestCheck(!SaveMenu_IsOpen(), "B / Volver cierra el menu");
+      }
+      if (f == 2700) {
+        SDL_LockMutex(g_audio_mutex);
+        HandleCommand(kKeys_Save + 2, true);
+        SDL_UnlockMutex(g_audio_mutex);
+        HandleCommand(kKeys_SaveMenu, true);
+        SelftestDumpMenu("selftest_menu4.bmp");
+        HandleCommand(kKeys_SaveMenu, true);  // already open: does nothing
+        SDL_LockMutex(g_audio_mutex);
+        for (int i = 0; i < 30; i++) SaveMenu_Input(kSaveMenu_Down);
+        for (int i = 0; i < 7; i++) SaveMenu_Input(kSaveMenu_PageDown);
+        SDL_UnlockMutex(g_audio_mutex);
+        SelftestDumpMenu("selftest_menu5.bmp");
+        SDL_LockMutex(g_audio_mutex);
+        SaveMenu_Input(kSaveMenu_Back);
+        SDL_UnlockMutex(g_audio_mutex);
+      }
+      if (f == 2800) {
+        printf("Al salir: modulo 0x%02X, submodulo %d\n", main_module_index, submodule_index);
+        printf("SAVEMENU SELFTEST %s (%d fallas)\n", g_st_failures ? "FAIL" : "PASS", g_st_failures);
+        running = false;
+      }
+      g_st_frame++;
+    }
+#endif
+
     bool is_replay = false;
     bool rewound = false;
     SDL_LockMutex(g_audio_mutex);
@@ -569,6 +776,7 @@ int main(int argc, char** argv) {
       double st_t1 = StNow();
 #endif
       ZeldaRewindCapture();
+      SaveMenu_OnFramePlayed();
 #ifdef REWIND_SELFTEST
       double d = StNow() - st_t1;
       if (d > 0.00005) {  // only count real captures
@@ -615,6 +823,9 @@ int main(int argc, char** argv) {
       }
     }
   }
+  SDL_LockMutex(g_audio_mutex);
+  SaveMenu_OnQuit();
+  SDL_UnlockMutex(g_audio_mutex);
   if (g_config.autosave)
     HandleCommand(kKeys_Save + 0, true);
 
@@ -702,6 +913,18 @@ static void HandleCommand(uint32 j, bool pressed) {
     return;
   }
 
+  if (j == kKeys_SaveMenu) {
+    if (pressed && !SaveMenu_IsOpen()) {
+      SaveMenu_Toggle();
+      // Release game buttons so nothing stays held while the menu is open.
+      g_input1_state = 0;
+      g_rewind_held = 0;
+      g_turbo = 0;
+      g_menu_last_stick = g_gamepad_buttons;
+    }
+    return;
+  }
+
   // Everything that might access audio state
   // (like SaveLoad and Reset) must have the lock.
   SDL_LockMutex(g_audio_mutex);
@@ -725,6 +948,7 @@ static void HandleCommand_Locked(uint32 j, bool pressed) {
     SaveLoadSlot(kSaveLoad_Load, j - kKeys_Load);
   } else if (j <= kKeys_Save_Last) {
     SaveLoadSlot(kSaveLoad_Save, j - kKeys_Save);
+    SaveMenu_OnManualSave(j - kKeys_Save);
   } else if (j <= kKeys_Replay_Last) {
     SaveLoadSlot(kSaveLoad_Replay, j - kKeys_Replay);
   } else if (j <= kKeys_LoadRef_Last) {
@@ -771,6 +995,44 @@ static void HandleCommand_Locked(uint32 j, bool pressed) {
     case kKeys_VolumeDown: HandleVolumeAdjustment(j == kKeys_VolumeUp ? 1 : -1); break;
     default: assert(0);
     }
+  }
+}
+
+static void SaveMenuAction(int action) {
+  SDL_LockMutex(g_audio_mutex);
+  SaveMenu_Input(action);
+  SDL_UnlockMutex(g_audio_mutex);
+}
+
+static void HandleSaveMenuKey(int key, int mod) {
+  int cmd = FindCmdForSdlKey(key, mod);
+  if (key == SDLK_UP || cmd == kKeys_Controls + 0)
+    SaveMenuAction(kSaveMenu_Up);
+  else if (key == SDLK_DOWN || cmd == kKeys_Controls + 1)
+    SaveMenuAction(kSaveMenu_Down);
+  else if (key == SDLK_PAGEUP || key == SDLK_LEFT || cmd == kKeys_Controls + 2)
+    SaveMenuAction(kSaveMenu_PageUp);
+  else if (key == SDLK_PAGEDOWN || key == SDLK_RIGHT || cmd == kKeys_Controls + 3)
+    SaveMenuAction(kSaveMenu_PageDown);
+  else if (key == SDLK_RETURN || key == SDLK_KP_ENTER || cmd == kKeys_Controls + 5 || cmd == kKeys_Controls + 6)
+    SaveMenuAction(kSaveMenu_Ok);
+  else if (key == SDLK_ESCAPE || key == SDLK_BACKSPACE || cmd == kKeys_Controls + 7 || cmd == kKeys_SaveMenu)
+    SaveMenuAction(kSaveMenu_Back);
+}
+
+// Uses the Xbox button convention: A accepts, B goes back.
+static void HandleSaveMenuGamepad(int button) {
+  switch (button) {
+  case kGamepadBtn_DpadUp: SaveMenuAction(kSaveMenu_Up); break;
+  case kGamepadBtn_DpadDown: SaveMenuAction(kSaveMenu_Down); break;
+  case kGamepadBtn_DpadLeft: case kGamepadBtn_L1: SaveMenuAction(kSaveMenu_PageUp); break;
+  case kGamepadBtn_DpadRight: case kGamepadBtn_R1: SaveMenuAction(kSaveMenu_PageDown); break;
+  case kGamepadBtn_A: SaveMenuAction(kSaveMenu_Ok); break;
+  case kGamepadBtn_B: SaveMenuAction(kSaveMenu_Back); break;
+  case kGamepadBtn_Start:
+    // The same combo that opens the menu (View+Start) closes it.
+    SaveMenuAction((g_gamepad_modifiers & (1 << kGamepadBtn_Back)) ? kSaveMenu_Back : kSaveMenu_Ok);
+    break;
   }
 }
 
