@@ -16,6 +16,7 @@ void ZeldaDiscardUnusedAudioFrames();
 void ZeldaRestoreMusicAfterLoad_Locked(bool is_reset);
 void ZeldaSaveMusicStateToRam_Locked();
 extern bool g_skip_msu_restore;
+void ZeldaSetVolumes(int master, int music, int sfx);  // 0-100 each
 void ZeldaPushApuState();
 
 #endif  // ZELDA3_AUDIO_H_

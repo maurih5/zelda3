@@ -72,9 +72,18 @@ typedef struct KeyMapHashEnt {
 static uint16 keymap_hash_first[255];
 static KeyMapHashEnt *keymap_hash;
 static int keymap_hash_size;
-static bool has_keynameid[countof(kKeyNameId)];
 
-static bool KeyMapHash_Add(uint16 key, uint16 cmd) {
+// One keyboard key and one gamepad combo per command. The lookup tables
+// below are rebuilt from these whenever a binding changes, so bindings can
+// be changed while the game runs.
+static uint16 g_kbd_bind[kKeys_Total];
+typedef struct PadBind {
+  int8 button;  // kGamepadBtn_Invalid = none
+  uint32 modifiers;
+} PadBind;
+static PadBind g_pad_bind[kKeys_Total];
+
+static void KeyMapHash_Add(uint16 key, uint16 cmd) {
   if ((keymap_hash_size & 0xff) == 0) {
     if (keymap_hash_size > 10000)
       Die("Too many keys");
@@ -90,12 +99,9 @@ static bool KeyMapHash_Add(uint16 key, uint16 cmd) {
   uint16 *cur = &keymap_hash_first[j];
   while (*cur) {
     KeyMapHashEnt *ent = &keymap_hash[*cur - 1];
-    if (ent->key == key)
-      return false;
     cur = &ent->next;
   }
   *cur = i + 1;
-  return true;
 }
 
 static int KeyMapHash_Find(uint16 key) {
@@ -109,7 +115,7 @@ static int KeyMapHash_Find(uint16 key) {
   return 0;
 }
 
-int FindCmdForSdlKey(SDL_Keycode code, SDL_Keymod mod) {
+static int EncodeSdlKey(SDL_Keycode code, SDL_Keymod mod) {
   if (code & ~(SDLK_SCANCODE_MASK | 0x1ff))
     return 0;
   int key = 0;
@@ -120,7 +126,44 @@ int FindCmdForSdlKey(SDL_Keycode code, SDL_Keymod mod) {
   if (code != SDLK_LSHIFT && code != SDLK_RSHIFT)
     key |= mod & KMOD_SHIFT ? kKeyMod_Shift : 0;
   key |= REMAP_SDL_KEYCODE(code);
-  return KeyMapHash_Find(key);
+  return key;
+}
+
+int FindCmdForSdlKey(SDL_Keycode code, SDL_Keymod mod) {
+  int key = EncodeSdlKey(code, mod);
+  return key ? KeyMapHash_Find(key) : 0;
+}
+
+// Assigns |key| to |cmd|, removing it from any other command. Returns the
+// command that lost the key (or 0).
+static int SetKbdBinding(int cmd, int key) {
+  int stolen = 0;
+  if (key) {
+    for (int i = 1; i < kKeys_Total; i++) {
+      if (i != cmd && g_kbd_bind[i] == key) {
+        g_kbd_bind[i] = 0;
+        stolen = i;
+      }
+    }
+  }
+  g_kbd_bind[cmd] = key;
+  return stolen;
+}
+
+static int SetPadBinding(int cmd, int button, uint32 modifiers) {
+  int stolen = 0;
+  modifiers &= ~(1u << button);
+  if (button != kGamepadBtn_Invalid) {
+    for (int i = 1; i < kKeys_Total; i++) {
+      if (i != cmd && g_pad_bind[i].button == button && g_pad_bind[i].modifiers == modifiers) {
+        g_pad_bind[i].button = kGamepadBtn_Invalid;
+        stolen = i;
+      }
+    }
+  }
+  g_pad_bind[cmd].button = button;
+  g_pad_bind[cmd].modifiers = button != kGamepadBtn_Invalid ? modifiers : 0;
+  return stolen;
 }
 
 static void ParseKeyArray(char *value, int cmd, int size) {
@@ -146,8 +189,8 @@ static void ParseKeyArray(char *value, int cmd, int size) {
       fprintf(stderr, "Unknown key: '%s'\n", s);
       continue;
     }
-    if (!KeyMapHash_Add(key_with_mod | REMAP_SDL_KEYCODE(key), cmd))
-      fprintf(stderr, "Duplicate key: '%s'\n", s);
+    // If another command had this key, the last assignment wins.
+    SetKbdBinding(cmd, key_with_mod | REMAP_SDL_KEYCODE(key));
   }
 }
 
@@ -159,7 +202,6 @@ typedef struct GamepadMapEnt {
 static uint16 joymap_first[kGamepadBtn_Count];
 static GamepadMapEnt *joymap_ents;
 static int joymap_size;
-static bool has_joypad_controls;
 
 static int CountBits32(uint32 n) {
   int count = 0;
@@ -245,7 +287,7 @@ static void ParseGamepadArray(char *value, int cmd, int size) {
         ss++;
         modifiers |= 1 << button;
       } else if (*ss == 0) {
-        GamepadMap_Add(button, modifiers, cmd);
+        SetPadBinding(cmd, button, modifiers);
         break;
       } else
         goto BAD;
@@ -253,17 +295,38 @@ static void ParseGamepadArray(char *value, int cmd, int size) {
   }
 }
 
-static void RegisterDefaultKeys() {
-  for (int i = 1; i < countof(kKeyNameId); i++) {
-    if (!has_keynameid[i]) {
-      int size = kKeyNameId[i].size, k = kKeyNameId[i].id;
-      for (int j = 0; j < size; j++, k++)
-        KeyMapHash_Add(kDefaultKbdControls[k], k);
-    }
+static void SetDefaultKeys() {
+  for (int k = 0; k < kKeys_Total; k++) {
+    g_kbd_bind[k] = 0;
+    g_pad_bind[k].button = kGamepadBtn_Invalid;
+    g_pad_bind[k].modifiers = 0;
   }
-  if (!has_joypad_controls) {
-    for (int i = 0; i < countof(kDefaultGamepadCmds); i++)
-      GamepadMap_Add(kDefaultGamepadCmds[i], 0, kKeys_Controls + i);
+  for (int k = 1; k < kKeys_Total; k++)
+    SetKbdBinding(k, kDefaultKbdControls[k]);
+  for (int i = 0; i < countof(kDefaultGamepadCmds); i++)
+    SetPadBinding(kKeys_Controls + i, kDefaultGamepadCmds[i], 0);
+}
+
+static void RebuildKeyMaps() {
+  keymap_hash_size = 0;
+  memset(keymap_hash_first, 0, sizeof(keymap_hash_first));
+  joymap_size = 0;
+  memset(joymap_first, 0, sizeof(joymap_first));
+  for (int k = 1; k < kKeys_Total; k++) {
+    if (g_kbd_bind[k])
+      KeyMapHash_Add(g_kbd_bind[k], k);
+    if (g_pad_bind[k].button != kGamepadBtn_Invalid)
+      GamepadMap_Add(g_pad_bind[k].button, g_pad_bind[k].modifiers, k);
+  }
+}
+
+// A [KeyMap]/[GamepadMap] line replaces the whole group of keys.
+static void ClearKeyGroup(int id, int size, bool gamepad) {
+  for (int k = id; k < id + size && k < kKeys_Total; k++) {
+    if (gamepad)
+      g_pad_bind[k].button = kGamepadBtn_Invalid, g_pad_bind[k].modifiers = 0;
+    else
+      g_kbd_bind[k] = 0;
   }
 }
 
@@ -315,18 +378,17 @@ static bool ParseBoolBit(const char *value, uint32 *data, uint32 mask) {
 
 static bool HandleIniConfig(int section, const char *key, char *value) {
   if (section == 0) {
-    for (int i = 0; i < countof(kKeyNameId); i++) {
+    for (int i = 1; i < countof(kKeyNameId); i++) {
       if (StringEqualsNoCase(key, kKeyNameId[i].name)) {
-        has_keynameid[i] = true;
+        ClearKeyGroup(kKeyNameId[i].id, kKeyNameId[i].size, false);
         ParseKeyArray(value, kKeyNameId[i].id, kKeyNameId[i].size);
         return true;
       }
     }
   } else if (section == 5) {
-    for (int i = 0; i < countof(kKeyNameId); i++) {
+    for (int i = 1; i < countof(kKeyNameId); i++) {
       if (StringEqualsNoCase(key, kKeyNameId[i].name)) {
-        if (i == 1)
-          has_joypad_controls = true;
+        ClearKeyGroup(kKeyNameId[i].id, kKeyNameId[i].size, true);
         ParseGamepadArray(value, kKeyNameId[i].id, kKeyNameId[i].size);
         return true;
       }
@@ -404,7 +466,13 @@ static bool HandleIniConfig(int section, const char *key, char *value) {
       g_config.msu_path = value;
       return true;
     } else if (StringEqualsNoCase(key, "MSUVolume")) {
-      g_config.msuvolume = atoi(value);
+      g_config.msuvolume = IntMin(IntMax(atoi(value), 0), 100);
+      return true;
+    } else if (StringEqualsNoCase(key, "Volume")) {
+      g_config.volume = IntMin(IntMax(atoi(value), 0), 100);
+      return true;
+    } else if (StringEqualsNoCase(key, "SfxVolume")) {
+      g_config.sfx_volume = IntMin(IntMax(atoi(value), 0), 100);
       return true;
     } else if (StringEqualsNoCase(key, "ResumeMSU")) {
       return ParseBool(value, &g_config.resume_msu);
@@ -495,6 +563,77 @@ static bool HandleIniConfig(int section, const char *key, char *value) {
   return false;
 }
 
+// Settings changed from the in-game options menu. They're written to their own
+// file, read after zelda3.ini, so the user's commented zelda3.ini is never rewritten.
+static const char *const kSectionNames[] = {
+  "KeyMap", "Graphics", "Sound", "General", "Features", "GamepadMap",
+};
+typedef struct OverrideEnt {
+  int section;
+  char key[32];
+  char *value;
+} OverrideEnt;
+static OverrideEnt *g_overrides;
+static int g_num_overrides;
+static char *g_override_path;
+static bool g_recording_overrides;
+
+static void RecordOverride(int section, const char *key, const char *value) {
+  for (int i = 0; i < g_num_overrides; i++) {
+    OverrideEnt *e = &g_overrides[i];
+    if (e->section == section && StringEqualsNoCase(e->key, key)) {
+      free(e->value);
+      e->value = strdup(value);
+      return;
+    }
+  }
+  if ((g_num_overrides & 31) == 0) {
+    g_overrides = realloc(g_overrides, sizeof(OverrideEnt) * (g_num_overrides + 32));
+    if (!g_overrides) Die("realloc failure");
+  }
+  OverrideEnt *e = &g_overrides[g_num_overrides++];
+  e->section = section;
+  snprintf(e->key, sizeof(e->key), "%s", key);
+  e->value = strdup(value);
+}
+
+static bool WriteOverrides() {
+  if (!g_override_path)
+    return false;
+  FILE *f = fopen(g_override_path, "wb");
+  if (!f) {
+    fprintf(stderr, "Unable to write %s\n", g_override_path);
+    return false;
+  }
+  fprintf(f, "# Generado por el menu de Opciones del juego (Escape / View+Start, pestana Opciones).\n"
+             "# Lo que esta aca tiene prioridad sobre zelda3.ini.\n"
+             "# Borra una linea para volver a usar el valor de zelda3.ini.\n");
+  for (int sec = 0; sec < countof(kSectionNames); sec++) {
+    bool any = false;
+    for (int i = 0; i < g_num_overrides; i++) {
+      OverrideEnt *e = &g_overrides[i];
+      if (e->section != sec)
+        continue;
+      if (!any)
+        fprintf(f, "\n[%s]\n", kSectionNames[sec]);
+      any = true;
+      fprintf(f, "%s = %s\n", e->key, e->value);
+    }
+  }
+  fclose(f);
+  return true;
+}
+
+bool Config_SetOverride(const char *section, const char *key, const char *value) {
+  for (int sec = 0; sec < countof(kSectionNames); sec++) {
+    if (StringEqualsNoCase(section, kSectionNames[sec])) {
+      RecordOverride(sec, key, value);
+      return WriteOverrides();
+    }
+  }
+  return false;
+}
+
 static bool ParseOneConfigFile(const char *filename, int depth) {
   char *filedata = (char*)ReadWholeFile(filename, NULL), *p;
   if (!filedata)
@@ -524,6 +663,8 @@ static bool ParseOneConfigFile(const char *filename, int depth) {
         fprintf(stderr, "%s:%d: Expecting 'key=value'\n", filename, lineno);
         continue;
       }
+      if (section >= 0 && g_recording_overrides)
+        RecordOverride(section, p, v);
       if (section >= 0 && !HandleIniConfig(section, p, v))
         fprintf(stderr, "%s:%d: Can't parse '%s'\n", filename, lineno, p);
     }
@@ -533,10 +674,13 @@ static bool ParseOneConfigFile(const char *filename, int depth) {
 
 void ParseConfigFile(const char *filename) {
   g_config.msuvolume = 100;  // default msu volume, 100%
+  g_config.volume = 100;
+  g_config.sfx_volume = 100;
   g_config.rewind_seconds = 30;
   g_config.rewind_frame_interval = 2;
   g_config.autosave_minutes = 5;
   g_config.autosave_slots = 10;
+  SetDefaultKeys();
 
   if (filename != NULL || !ParseOneConfigFile("zelda3.user.ini", 0)) {
     if (filename == NULL)
@@ -544,5 +688,124 @@ void ParseConfigFile(const char *filename) {
     if (!ParseOneConfigFile(filename, 0))
       fprintf(stderr, "Warning: Unable to read config file %s\n", filename);
   }
-  RegisterDefaultKeys();
+  // Settings saved by the in-game options menu, next to the config file.
+  g_override_path = ReplaceFilenameWithNewPath(filename ? filename : "zelda3.user.ini", "zelda3.opciones.ini");
+  g_recording_overrides = true;
+  ParseOneConfigFile(g_override_path, 0);
+  g_recording_overrides = false;
+  RebuildKeyMaps();
+}
+
+// ---------------------------------------------------------------------------
+// Runtime key binding (used by the in-game controls menu)
+// ---------------------------------------------------------------------------
+
+static const char *const kPadIniNames[kGamepadBtn_Count] = {
+  "A", "B", "X", "Y", "Back", "Guide", "Start", "L3", "R3", "Lb", "Rb",
+  "DpadUp", "DpadDown", "DpadLeft", "DpadRight", "L2", "R2",
+};
+static const char *const kPadNiceNames[kGamepadBtn_Count] = {
+  "A", "B", "X", "Y", "View", "Guía", "Start", "LS", "RS", "LB", "RB",
+  "Cruz arriba", "Cruz abajo", "Cruz izq.", "Cruz der.", "LT", "RT",
+};
+
+int Config_EncodeKey(SDL_Keycode code, SDL_Keymod mod) {
+  return EncodeSdlKey(code, mod);
+}
+
+int Config_GetKeyBinding(int cmd) {
+  return (cmd > 0 && cmd < kKeys_Total) ? g_kbd_bind[cmd] : 0;
+}
+
+int Config_GetPadBinding(int cmd, uint32 *modifiers) {
+  if (cmd <= 0 || cmd >= kKeys_Total || g_pad_bind[cmd].button == kGamepadBtn_Invalid) {
+    *modifiers = 0;
+    return kGamepadBtn_Invalid;
+  }
+  *modifiers = g_pad_bind[cmd].modifiers;
+  return g_pad_bind[cmd].button;
+}
+
+static void KeyToString(int key, char *buf, size_t n) {
+  buf[0] = 0;
+  if (!key)
+    return;
+  SDL_Keycode code = (key & 0x1ff) | (key & kKeyMod_ScanCode ? SDLK_SCANCODE_MASK : 0);
+  snprintf(buf, n, "%s%s%s%s", key & kKeyMod_Ctrl ? "Ctrl+" : "", key & kKeyMod_Alt ? "Alt+" : "",
+           key & kKeyMod_Shift ? "Shift+" : "", SDL_GetKeyName(code));
+}
+
+static void PadToString(int button, uint32 modifiers, const char *const *names, char *buf, size_t n) {
+  buf[0] = 0;
+  if (button == kGamepadBtn_Invalid)
+    return;
+  size_t pos = 0;
+  for (int b = 0; b < kGamepadBtn_Count; b++) {
+    if (modifiers & (1u << b))
+      pos += snprintf(buf + pos, pos < n ? n - pos : 0, "%s+", names[b]);
+  }
+  snprintf(buf + pos, pos < n ? n - pos : 0, "%s", names[button]);
+}
+
+void Config_KeyName(int key, char *buf, size_t n) {
+  KeyToString(key, buf, n);
+}
+
+void Config_PadName(int button, uint32 modifiers, char *buf, size_t n) {
+  PadToString(button, modifiers, kPadNiceNames, buf, n);
+}
+
+const char *Config_CommandIniName(int cmd) {
+  for (int i = 1; i < countof(kKeyNameId); i++)
+    if (cmd >= kKeyNameId[i].id && cmd < kKeyNameId[i].id + kKeyNameId[i].size)
+      return kKeyNameId[i].name;
+  return NULL;
+}
+
+// Writes the whole [KeyMap] or [GamepadMap] line of the group |cmd| is part of.
+static void SaveKeyGroup(int cmd, bool gamepad) {
+  for (int i = 1; i < countof(kKeyNameId); i++) {
+    int id = kKeyNameId[i].id, size = kKeyNameId[i].size;
+    if (cmd < id || cmd >= id + size)
+      continue;
+    char value[1024], one[96];
+    size_t pos = 0, keep = 0;
+    value[0] = 0;
+    for (int k = id; k < id + size; k++) {
+      if (gamepad)
+        PadToString(g_pad_bind[k].button, g_pad_bind[k].modifiers, kPadIniNames, one, sizeof(one));
+      else
+        KeyToString(g_kbd_bind[k], one, sizeof(one));
+      pos += snprintf(value + pos, sizeof(value) - pos, "%s%s", k != id ? ", " : "", one);
+      if (pos >= sizeof(value))
+        return;
+      if (one[0])
+        keep = pos;
+    }
+    value[keep] = 0;  // drop trailing empty entries
+    Config_SetOverride(gamepad ? "GamepadMap" : "KeyMap", kKeyNameId[i].name, value);
+    return;
+  }
+}
+
+int Config_SetKeyBinding(int cmd, int key) {
+  if (cmd <= 0 || cmd >= kKeys_Total)
+    return 0;
+  int stolen = SetKbdBinding(cmd, key);
+  RebuildKeyMaps();
+  SaveKeyGroup(cmd, false);
+  if (stolen)
+    SaveKeyGroup(stolen, false);
+  return stolen;
+}
+
+int Config_SetPadBinding(int cmd, int button, uint32 modifiers) {
+  if (cmd <= 0 || cmd >= kKeys_Total)
+    return 0;
+  int stolen = SetPadBinding(cmd, button, modifiers);
+  RebuildKeyMaps();
+  SaveKeyGroup(cmd, true);
+  if (stolen)
+    SaveKeyGroup(stolen, true);
+  return stolen;
 }

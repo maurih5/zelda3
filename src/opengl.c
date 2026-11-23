@@ -210,6 +210,9 @@ static void OpenGLRenderer_EndDraw() {
   int viewport_x = (drawable_width - viewport_width) >> 1;
   int viewport_y = (viewport_height - viewport_height) >> 1;
 
+  // A shader that was just switched off may have left these changed.
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  glActiveTexture(GL_TEXTURE0);
   glBindTexture(GL_TEXTURE_2D, g_texture.gl_texture);
   if (g_draw_width == g_texture.width && g_draw_height == g_texture.height) {
     if (!g_opengl_es)
@@ -241,6 +244,23 @@ static void OpenGLRenderer_EndDraw() {
   }
 
   SDL_GL_SwapWindow(g_window);
+}
+
+// Switches the glsl shader while running. An empty path turns it off.
+// On failure the current shader is kept and false is returned.
+bool OpenGLRenderer_SetShader(const char *path) {
+  if (!g_window)
+    return false;
+  GlslShader *gs = NULL;
+  if (path && *path) {
+    gs = GlslShader_CreateFromFile(path, g_opengl_es);
+    if (!gs)
+      return false;
+  }
+  if (g_glsl_shader)
+    GlslShader_Destroy(g_glsl_shader);
+  g_glsl_shader = gs;
+  return true;
 }
 
 static const struct RendererFuncs kOpenGLRendererFuncs = {

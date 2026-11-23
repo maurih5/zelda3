@@ -263,6 +263,22 @@ static void MixToBufferWithVolumeRamp(int16 *dst, const int16 *src, size_t n, fl
   }
 }
 
+// Volumes from the options menu (master * music / master * effects).
+static float g_msu_gain = 1.0f;
+static int32 g_spc_gain = 65536;
+
+static float VolumeToGain(int v) {
+  float f = IntMin(IntMax(v, 0), 100) * 0.01f;
+  return f * f;  // closer to how loud it sounds
+}
+
+void ZeldaSetVolumes(int master, int music, int sfx) {
+  ZeldaApuLock();
+  g_msu_gain = VolumeToGain(master) * VolumeToGain(music);
+  g_spc_gain = (int32)(65536 * VolumeToGain(master) * VolumeToGain(sfx));
+  ZeldaApuUnlock();
+}
+
 static void MixToBuffer(MsuPlayer *mp, int16 *dst, const int16 *src, uint32 n) {
   if (mp->volume != mp->volume_target) {
     float step = mp->volume < mp->volume_target ? mp->volume_step : -mp->volume_step;
@@ -275,10 +291,10 @@ static void MixToBuffer(MsuPlayer *mp, int16 *dst, const int16 *src, uint32 n) {
     }
     float vol = mp->volume;
     mp->volume = new_vol;
-    MixToBufferWithVolumeRamp(dst, src, curn, vol, step, new_vol);
+    MixToBufferWithVolumeRamp(dst, src, curn, vol * g_msu_gain, step * g_msu_gain, new_vol * g_msu_gain);
     dst += curn * 2, src += curn * 2, n -= curn;
   }
-  MixToBufferWithVolume(dst, src, n, mp->volume);
+  MixToBufferWithVolume(dst, src, n, mp->volume * g_msu_gain);
 }
 
 void MsuPlayer_Mix(MsuPlayer *mp, int16 *audio_buffer, int audio_samples) {
@@ -452,6 +468,10 @@ void ZeldaRenderAudio(int16 *audio_buffer, int samples, int channels) {
   ZeldaPopApuState();
   SpcPlayer_GenerateSamples(g_zenv.player);
   dsp_getSamples(g_zenv.player->dsp, audio_buffer, samples, channels);
+  if (g_spc_gain != 65536) {
+    for (int i = 0, n = samples * channels; i < n; i++)
+      audio_buffer[i] = (int16)(audio_buffer[i] * g_spc_gain >> 16);
+  }
   if (g_msu_player.f && channels == 2)
     MsuPlayer_Mix(&g_msu_player, audio_buffer, samples);
   ZeldaApuUnlock();
@@ -530,8 +550,10 @@ void ZeldaEnableMsu(uint8 enable) {
       fprintf(stderr, "Warning: MSU requires: AudioFreq = 44100\n");
   }
 
-  float volscale = g_config.msuvolume * (1.0f / 255 / 100);
-  float stepscale = g_config.msuvolume * (60.0f / 256 / 100) / g_config.audio_freq;
+  // The MSUVolume setting is applied while mixing (see ZeldaSetVolumes) so it
+  // can be changed while playing.
+  float volscale = 1.0f / 255;
+  float stepscale = (60.0f / 256) / g_config.audio_freq;
   for (size_t i = 0; i != countof(kVolumeTransitionStepFloat); i++) {
     kVolumeTransitionStepFloat[i] = kVolumeTransitionStep[i] * stepscale;
     kVolumeTransitionTargetFloat[i] = kVolumeTransitionTarget[i] * volscale;

@@ -1,4 +1,5 @@
 #include "zelda_rtl.h"
+#include <stddef.h>
 #include "variables.h"
 #include "misc.h"
 #include "nmi.h"
@@ -833,6 +834,13 @@ static RewindMeta Rewind_GetRecorderMeta() {
   return m;
 }
 
+// The snapshot format doesn't contain the PPU registers (scroll, OAM, window,
+// mode 7...) because the game rewrites them from RAM during every NMI. Rewind
+// shows a loaded state without running a frame, so it also stores them, or the
+// background would keep the scroll position of the moment rewinding started.
+#define kPpuRegsStart offsetof(Ppu, screenEnabled)
+#define kPpuRegsSize (offsetof(Ppu, brightnessMult) - offsetof(Ppu, screenEnabled))
+
 void ZeldaRewindCapture() {
   if (!g_rewind.capacity || state_recorder.replay_mode)
     return;
@@ -843,6 +851,7 @@ void ZeldaRewindCapture() {
 
   g_rewind.tmp.size = 0;
   SaveSnesState(&saveFunc, &g_rewind.tmp);
+  ByteArray_AppendData(&g_rewind.tmp, (uint8 *)g_zenv.ppu + kPpuRegsStart, kPpuRegsSize);
   RewindMeta meta = Rewind_GetRecorderMeta();
 #ifdef REWIND_SELFTEST
   meta.hash = RewindHash(g_rewind.tmp.data, g_rewind.tmp.size);
@@ -881,9 +890,14 @@ static void Rewind_LoadCur(bool full) {
   static uint8 sram_backup[0x2000];
   memcpy(sram_backup, g_zenv.sram, 0x2000);
   g_skip_msu_restore = !full;
-  LoadFuncState st = { g_rewind.cur.data, g_rewind.cur.data + g_rewind.cur.size };
+  uint8 *regs = g_rewind.cur.data + g_rewind.cur.size - kPpuRegsSize;
+  LoadFuncState st = { g_rewind.cur.data, regs };
   LoadSnesState(&loadFunc, &st);
   assert(st.p == st.pend);
+#ifdef REWIND_SELFTEST
+  if (!getenv("ZELDA3_SELFTEST_NOPPUREGS"))
+#endif
+  memcpy((uint8 *)g_zenv.ppu + kPpuRegsStart, regs, kPpuRegsSize);
   g_skip_msu_restore = false;
   memcpy(g_zenv.sram, sram_backup, 0x2000);
   EmuSynchronizeWholeState();
@@ -924,6 +938,7 @@ bool ZeldaRewindStep() {
     SaveSnesState(&saveFunc, &chk);
     // SRAM is kept as-is on rewind, so compare against cur with the live SRAM.
     uint32 h = RewindHash(g_rewind.cur.data, g_rewind.cur.size);
+    ByteArray_AppendData(&chk, (uint8 *)g_zenv.ppu + kPpuRegsStart, kPpuRegsSize);
     uint32 h2 = RewindHash(chk.data, chk.size);
     g_rewind_selftest_checks++;
     if (g_rewind.cur_meta.hash != h) {

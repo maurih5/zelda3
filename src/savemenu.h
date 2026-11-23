@@ -13,6 +13,19 @@ enum {
   kSaveMenu_PageDown,
   kSaveMenu_Ok,
   kSaveMenu_Back,
+  kSaveMenu_Left,
+  kSaveMenu_Right,
+  kSaveMenu_PrevTab,
+  kSaveMenu_NextTab,
+  kSaveMenu_Clear,
+};
+
+// Tabs of the in-game menu
+enum {
+  kMenuTab_Saves,
+  kMenuTab_Options,
+  kMenuTab_Controls,
+  kMenuTab_Count,
 };
 
 void SaveMenu_Init(int autosave_minutes, int autosave_slots);
@@ -26,9 +39,12 @@ void SaveMenu_DrawOverlay(uint8 *pixels, int pitch, int scale, int width, int he
 void SaveMenu_OnFramePlayed();
 void SaveMenu_OnManualSave(int slot);
 void SaveMenu_OnQuit();
+void SaveMenu_ShowToast(const char *msg);
 
 bool SaveMenu_IsOpen();
 void SaveMenu_Toggle();
+void SaveMenu_OpenTab(int tab);
+int SaveMenu_GetTab();
 // Call with the audio lock held: kSaveMenu_Ok loads a save state.
 void SaveMenu_Input(int action);
 void SaveMenu_Draw(uint8 *pixels, int pitch, int width, int height);

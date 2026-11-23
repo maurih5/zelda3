@@ -1,6 +1,7 @@
 #pragma once
 #include "types.h"
 #include <SDL_keycode.h>
+#include <stddef.h>
 
 enum {
   kKeys_Null,
@@ -69,6 +70,8 @@ typedef struct Config {
   bool resume_msu;
   bool disable_frame_delay;
   uint8 msuvolume;
+  uint8 volume;      // master volume 0-100
+  uint8 sfx_volume;  // SPC output (sound effects, and music when not using MSU) 0-100
   uint32 features0;
   int rewind_seconds;
   int rewind_frame_interval;
@@ -114,3 +117,16 @@ extern Config g_config;
 void ParseConfigFile(const char *filename);
 int FindCmdForSdlKey(SDL_Keycode code, SDL_Keymod mod);
 int FindCmdForGamepadButton(int button, uint32 modifiers);
+
+// Runtime configuration from the in-game options menu. Changes are saved to
+// zelda3.opciones.ini (read after zelda3.ini).
+bool Config_SetOverride(const char *section, const char *key, const char *value);
+int Config_EncodeKey(SDL_Keycode code, SDL_Keymod mod);
+int Config_GetKeyBinding(int cmd);
+int Config_GetPadBinding(int cmd, uint32 *modifiers);  // returns button or kGamepadBtn_Invalid
+// Both return the command that lost the key/button because of the new binding (or 0).
+int Config_SetKeyBinding(int cmd, int key);
+int Config_SetPadBinding(int cmd, int button, uint32 modifiers);
+void Config_KeyName(int key, char *buf, size_t n);
+void Config_PadName(int button, uint32 modifiers, char *buf, size_t n);
+const char *Config_CommandIniName(int cmd);

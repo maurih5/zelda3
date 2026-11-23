@@ -27,10 +27,11 @@
 #include "util.h"
 #include "audio.h"
 #include "savemenu.h"
+#include "optmenu.h"
 
 static bool g_run_without_emu = 0;
 
-#ifdef SAVEMENU_SELFTEST
+#if defined(SAVEMENU_SELFTEST) || defined(REWIND_SELFTEST)
 void SaveMenu_SelftestSetInterval(int frames);
 const char *SaveMenu_SelftestSelectedPath();
 int SaveMenu_SelftestNumEntries();
@@ -109,6 +110,10 @@ extern int g_rewind_selftest_mismatches, g_rewind_selftest_checks;
 static uint8 *g_st_ram_copy;
 static double g_st_cap_time, g_st_step_time, g_st_cap_max, g_st_step_max;
 static int g_st_cap_n, g_st_step_n;
+// Hash of the image drawn for each game frame, to check that rewinding shows the same picture.
+static uint32 g_st_img_hash[65536], g_st_img_frame[65536];
+static int g_st_img_checks, g_st_img_mismatches;
+static bool g_st_rewinding_now;
 static double StNow() { return (double)SDL_GetPerformanceCounter() / SDL_GetPerformanceFrequency(); }
 #endif
 
@@ -119,6 +124,7 @@ static void RenderNumber(uint8 *dst, size_t pitch, int n, bool big);
 static void HandleInput(int keyCode, int modCode, bool pressed);
 static void HandleCommand(uint32 j, bool pressed);
 static void HandleSaveMenuKey(int key, int mod);
+static bool HandleSaveMenuKeyRepeats(int key, int mod);
 static void HandleSaveMenuGamepad(int button);
 static int RemapSdlButton(int button);
 static void HandleGamepadInput(int button, bool pressed);
@@ -252,6 +258,31 @@ static void DrawPpuFrameWithPerf() {
   } else {
     ZeldaDrawPpuFrame(pixel_buffer, pitch, g_ppu_render_flags);
   }
+#ifdef REWIND_SELFTEST
+  {
+    uint32 hh = 2166136261u;
+    int w = g_snes_width * render_scale, hgt = g_snes_height * render_scale;
+    for (int y = 0; y < hgt; y++) {
+      const uint32 *row = (const uint32 *)(pixel_buffer + (size_t)y * pitch);
+      for (int x = 0; x < w; x++)
+        hh = (hh ^ (row[x] & 0xffffff)) * 16777619u;
+    }
+    uint32 fr = ZeldaSelftestTotalFrames(), slot = fr & 0xffff;
+    if (!g_st_rewinding_now) {
+      g_st_img_hash[slot] = hh;
+      g_st_img_frame[slot] = fr + 1;
+    } else if (g_st_img_frame[slot] == fr + 1) {
+      g_st_img_checks++;
+      if (g_st_img_hash[slot] != hh) {
+        if (g_st_img_mismatches++ < 3) {
+          char name[64];
+          snprintf(name, sizeof(name), "rewind_mismatch_%d.bmp", g_st_img_mismatches);
+          SelftestWriteBmp(name, pixel_buffer, pitch, w, hgt);
+        }
+      }
+    }
+  }
+#endif
   SaveMenu_CaptureFrame(pixel_buffer, pitch, render_scale, g_snes_width, g_snes_height);
   SaveMenu_DrawOverlay(pixel_buffer, pitch, render_scale, g_snes_width, g_snes_height);
   if (g_display_perf)
@@ -455,6 +486,7 @@ int main(int argc, char** argv) {
   SDL_AudioSpec want = { 0 }, have;
   g_audio_mutex = SDL_CreateMutex();
   if (!g_audio_mutex) Die("No mutex");
+  OptMenu_ApplyStartupSettings();
 
   if (g_config.enable_audio) {
     want.freq = g_config.audio_freq;
@@ -508,10 +540,6 @@ int main(int argc, char** argv) {
       case SDL_CONTROLLERBUTTONDOWN:
       case SDL_CONTROLLERBUTTONUP: {
         int b = RemapSdlButton(event.cbutton.button);
-        if (b >= 0 && event.type == SDL_CONTROLLERBUTTONDOWN && SaveMenu_IsOpen()) {
-          HandleSaveMenuGamepad(b);
-          break;
-        }
         if (b >= 0)
           HandleGamepadInput(b, event.type == SDL_CONTROLLERBUTTONDOWN);
         break;
@@ -530,13 +558,25 @@ int main(int argc, char** argv) {
         break;
       case SDL_KEYDOWN:
         if (SaveMenu_IsOpen()) {
-          if (!event.key.repeat || event.key.keysym.sym == SDLK_UP || event.key.keysym.sym == SDLK_DOWN)
+          if (OptMenu_IsCapturing()) {
+            if (!event.key.repeat) {
+              SDL_LockMutex(g_audio_mutex);
+              OptMenu_CaptureKey(event.key.keysym.sym, event.key.keysym.mod, true);
+              SDL_UnlockMutex(g_audio_mutex);
+            }
+          } else if (!event.key.repeat || HandleSaveMenuKeyRepeats(event.key.keysym.sym, event.key.keysym.mod)) {
             HandleSaveMenuKey(event.key.keysym.sym, event.key.keysym.mod);
+          }
           break;
         }
         HandleInput(event.key.keysym.sym, event.key.keysym.mod, true);
         break;
       case SDL_KEYUP:
+        if (SaveMenu_IsOpen() && OptMenu_IsCapturing()) {
+          SDL_LockMutex(g_audio_mutex);
+          OptMenu_CaptureKey(event.key.keysym.sym, event.key.keysym.mod, false);
+          SDL_UnlockMutex(g_audio_mutex);
+        }
         HandleInput(event.key.keysym.sym, event.key.keysym.mod, false);
         break;
       case SDL_QUIT:
@@ -559,8 +599,12 @@ int main(int argc, char** argv) {
       uint32 pressed = pad & ~g_menu_last_stick;
       g_menu_last_stick = pad;
       SDL_LockMutex(g_audio_mutex);
-      if (pressed & (1 << 4)) SaveMenu_Input(kSaveMenu_Up);
-      if (pressed & (1 << 5)) SaveMenu_Input(kSaveMenu_Down);
+      if (!OptMenu_IsCapturing()) {
+        if (pressed & (1 << 4)) SaveMenu_Input(kSaveMenu_Up);
+        if (pressed & (1 << 5)) SaveMenu_Input(kSaveMenu_Down);
+        if (pressed & (1 << 6)) SaveMenu_Input(kSaveMenu_Left);
+        if (pressed & (1 << 7)) SaveMenu_Input(kSaveMenu_Right);
+      }
       SDL_UnlockMutex(g_audio_mutex);
       if (SaveMenu_IsOpen()) {
         uint8 *px = NULL;
@@ -649,9 +693,10 @@ int main(int argc, char** argv) {
         printf("Replay finished: total_frames=%d ram hash %s\n", (int)ZeldaSelftestTotalFrames(),
                h == saved_hash ? "MATCHES" : "DIFFERS");
         printf("Rewind checks: %d, delta mismatches: %d\n", g_rewind_selftest_checks, g_rewind_selftest_mismatches);
+        printf("Rewind image checks: %d, images different from the original frame: %d\n", g_st_img_checks, g_st_img_mismatches);
         if (g_st_cap_n) printf("Capture: avg %.3f ms, max %.3f ms (%d)\n", g_st_cap_time / g_st_cap_n * 1000, g_st_cap_max * 1000, g_st_cap_n);
         if (g_st_step_n) printf("Step: avg %.3f ms, max %.3f ms (%d)\n", g_st_step_time / g_st_step_n * 1000, g_st_step_max * 1000, g_st_step_n);
-        exit_code = (h == saved_hash && g_rewind_selftest_mismatches == 0) ? 0 : 2;
+        exit_code = (h == saved_hash && g_rewind_selftest_mismatches == 0 && g_st_img_checks > 0 && g_st_img_mismatches == 0) ? 0 : 2;
         printf("SELFTEST %s\n", exit_code == 0 ? "PASS" : "FAIL");
         fflush(stdout);
         exit(exit_code);
@@ -742,6 +787,122 @@ int main(int argc, char** argv) {
         SaveMenu_Input(kSaveMenu_Back);
         SDL_UnlockMutex(g_audio_mutex);
       }
+      if (f == 0 && getenv("ZELDA3_SELFTEST_OPTCHECK")) {
+        // Second run: everything changed from the menu must come back from zelda3.opciones.ini
+        g_st_failures = 0;  // the first-run mapping check above is expected to differ now
+        printf("OPTCHECK: volume=%d features0=%x\n", g_config.volume, g_config.features0);
+        SelftestCheck(g_config.volume == 80, "volumen guardado (80)");
+        SelftestCheck((g_config.features0 & kFeatures0_TurnWhileDashing) != 0, "opcion de juego guardada");
+        SelftestCheck(FindCmdForSdlKey(SDLK_UP, 0) == kKeys_Controls + 0, "Arriba = flecha arriba guardado");
+        SelftestCheck(FindCmdForSdlKey(SDLK_w, 0) == 0, "W quedo libre");
+        SelftestCheck(FindCmdForSdlKey(SDLK_s, 0) == kKeys_Controls + 1, "el resto de los controles sigue igual");
+        SelftestCheck(FindCmdForGamepadButton(kGamepadBtn_Y, 1 << kGamepadBtn_Back | 1 << kGamepadBtn_Y) == kKeys_SaveMenu, "View+Y = menu guardado");
+        SelftestCheck(FindCmdForGamepadButton(kGamepadBtn_Start, 1 << kGamepadBtn_Back | 1 << kGamepadBtn_Start) != kKeys_SaveMenu, "View+Start ya no es el menu");
+        SelftestCheck(FindCmdForGamepadButton(kGamepadBtn_R1, 1 << kGamepadBtn_Back | 1 << kGamepadBtn_R1) == kKeys_Save, "View+RB sigue guardando");
+        SelftestCheck(FindCmdForSdlKey(SDLK_F1, KMOD_SHIFT) == kKeys_Save, "Shift+F1 sigue guardando");
+        SelftestCheck(FindCmdForSdlKey(SDLK_F5, KMOD_SHIFT) == kKeys_Save + 4, "Shift+F5 sigue guardando en la ranura 5");
+        printf("OPTCHECK %s (%d fallas)\n", g_st_failures ? "FAIL" : "PASS", g_st_failures);
+        exit(g_st_failures ? 2 : 0);
+      }
+      if (getenv("ZELDA3_SELFTEST_GL") && f >= 60) {
+        // Switch through every shader listed in the file, 3 frames each.
+        static FILE *list;
+        static int n_ok, n_fail, n;
+        if (f == 60) {
+          list = fopen(getenv("ZELDA3_SELFTEST_GL"), "rb");
+          printf("GLTEST start, gl shader supported=%d\n", Main_ShaderSupported());
+        }
+        if ((f - 60) % 3 == 0) {
+          char line[512];
+          if (!list || !fgets(line, sizeof(line), list)) {
+            bool back = Main_SetShader(g_config.shader);
+            printf("GLTEST done: %d ok, %d failed of %d; restore original=%d\n", n_ok, n_fail, n, back);
+            fflush(stdout);
+            exit(0);
+          }
+          line[strcspn(line, "\r\n")] = 0;
+          printf("GLTEST %s ... ", line);
+          fflush(stdout);
+          uint64 t0 = SDL_GetPerformanceCounter();
+          bool ok = Main_SetShader(line);
+          double ms = (double)(SDL_GetPerformanceCounter() - t0) * 1000 / SDL_GetPerformanceFrequency();
+          printf("%s %.0f ms\n", ok ? "ok" : "FAILED", ms);
+          fflush(stdout);
+          n++, ok ? n_ok++ : n_fail++;
+        }
+      }
+      if (f == 2750) {
+        HandleCommand(kKeys_SaveMenu, true);
+        SDL_LockMutex(g_audio_mutex);
+        SaveMenu_Input(kSaveMenu_NextTab);
+        SDL_UnlockMutex(g_audio_mutex);
+        SelftestCheck(SaveMenu_GetTab() == kMenuTab_Options, "RB pasa a Opciones");
+        SelftestDumpMenu("selftest_opt1.bmp");
+        int vol0 = g_config.volume;
+        SDL_LockMutex(g_audio_mutex);
+        for (int i = 0; i < 4; i++) SaveMenu_Input(kSaveMenu_Left);
+        SDL_UnlockMutex(g_audio_mutex);
+        printf("Volumen %d -> %d\n", vol0, g_config.volume);
+        SelftestCheck(g_config.volume == vol0 - 20, "izquierda baja el volumen");
+        SDL_LockMutex(g_audio_mutex);
+        for (int i = 0; i < 15; i++) SaveMenu_Input(kSaveMenu_Down);
+        uint32 feat0 = g_config.features0;
+        SaveMenu_Input(kSaveMenu_Ok);
+        SDL_UnlockMutex(g_audio_mutex);
+        SelftestCheck((g_config.features0 ^ feat0) == kFeatures0_TurnWhileDashing &&
+                      (g_wanted_zelda_features & kFeatures0_TurnWhileDashing), "A activa 'Girar al correr'");
+        SelftestDumpMenu("selftest_opt2.bmp");
+        SDL_LockMutex(g_audio_mutex);
+        for (int i = 0; i < 12; i++) SaveMenu_Input(kSaveMenu_Up);
+        SaveMenu_Input(kSaveMenu_Ok);  // Shader (needs OpenGL)
+        SDL_UnlockMutex(g_audio_mutex);
+        SelftestDumpMenu("selftest_opt3.bmp");
+        SDL_LockMutex(g_audio_mutex);
+        SaveMenu_Input(kSaveMenu_NextTab);
+        SDL_UnlockMutex(g_audio_mutex);
+        SelftestCheck(SaveMenu_GetTab() == kMenuTab_Controls, "RB pasa a Controles");
+        SelftestDumpMenu("selftest_ctl1.bmp");
+        SDL_LockMutex(g_audio_mutex);
+        SaveMenu_Input(kSaveMenu_Ok);
+        SDL_UnlockMutex(g_audio_mutex);
+        SelftestCheck(OptMenu_IsCapturing(), "A espera una tecla");
+        SelftestDumpMenu("selftest_ctl2.bmp");
+        OptMenu_CaptureKey(SDLK_RETURN, 0, false);  // release of the key that started it: ignored
+        SelftestCheck(OptMenu_IsCapturing(), "soltar Enter no asigna nada");
+        OptMenu_CaptureKey(SDLK_UP, 0, true);
+        SelftestCheck(!OptMenu_IsCapturing() && FindCmdForSdlKey(SDLK_UP, 0) == kKeys_Controls + 0 &&
+                      FindCmdForSdlKey(SDLK_w, 0) == 0, "Arriba reasignada a la flecha");
+        SDL_LockMutex(g_audio_mutex);
+        SaveMenu_Input(kSaveMenu_Right);
+        for (int i = 0; i < 12; i++) SaveMenu_Input(kSaveMenu_Down);
+        SaveMenu_Input(kSaveMenu_Ok);
+        SDL_UnlockMutex(g_audio_mutex);
+        OptMenu_CaptureButton(kGamepadBtn_A, false);  // release of A: ignored
+        OptMenu_CaptureButton(kGamepadBtn_Back, true);
+        OptMenu_CaptureButton(kGamepadBtn_Y, true);
+        SelftestDumpMenu("selftest_ctl3.bmp");
+        OptMenu_CaptureButton(kGamepadBtn_Y, false);
+        OptMenu_CaptureButton(kGamepadBtn_Back, false);
+        SelftestCheck(!OptMenu_IsCapturing() &&
+                      FindCmdForGamepadButton(kGamepadBtn_Y, 1 << kGamepadBtn_Back | 1 << kGamepadBtn_Y) == kKeys_SaveMenu,
+                      "menu reasignado a View+Y");
+        SelftestDumpMenu("selftest_ctl4.bmp");
+        SDL_LockMutex(g_audio_mutex);
+        for (int i = 0; i < 40; i++) SaveMenu_Input(kSaveMenu_Down);
+        SDL_UnlockMutex(g_audio_mutex);
+        SelftestDumpMenu("selftest_ctl5.bmp");
+        SDL_LockMutex(g_audio_mutex);
+        SaveMenu_Input(kSaveMenu_Back);
+        SDL_UnlockMutex(g_audio_mutex);
+        SelftestCheck(!SaveMenu_IsOpen(), "B cierra el menu desde Controles");
+        FILE *of = fopen("zelda3.opciones.ini", "rb");
+        SelftestCheck(of != NULL, "se escribio zelda3.opciones.ini");
+        if (of) {
+          char line[512];
+          while (fgets(line, sizeof(line), of)) printf("  | %s", line);
+          fclose(of);
+        }
+      }
       if (f == 2800) {
         printf("Al salir: modulo 0x%02X, submodulo %d\n", main_module_index, submodule_index);
         printf("SAVEMENU SELFTEST %s (%d fallas)\n", g_st_failures ? "FAIL" : "PASS", g_st_failures);
@@ -787,6 +948,9 @@ int main(int argc, char** argv) {
     } else {
       g_rewinding = true;
     }
+#ifdef REWIND_SELFTEST
+    g_st_rewinding_now = rewound;
+#endif
     SDL_UnlockMutex(g_audio_mutex);
 
     frameCtr++;
@@ -964,10 +1128,7 @@ static void HandleCommand_Locked(uint32 j, bool pressed) {
     case kKeys_ClearKeyLog: PatchCommand('k'); break;
     case kKeys_StopReplay: PatchCommand('l'); break;
     case kKeys_Fullscreen:
-      g_win_flags ^= SDL_WINDOW_FULLSCREEN_DESKTOP;
-      SDL_SetWindowFullscreen(g_window, g_win_flags & SDL_WINDOW_FULLSCREEN_DESKTOP);
-      g_cursor = !g_cursor;
-      SDL_ShowCursor(g_cursor);
+      Main_SetFullscreen(!Main_IsFullscreen());
       break;
     case kKeys_Reset:
       ZeldaReset(true);
@@ -998,37 +1159,108 @@ static void HandleCommand_Locked(uint32 j, bool pressed) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Used by the options menu
+// ---------------------------------------------------------------------------
+
+bool Main_IsFullscreen() {
+  return (g_win_flags & SDL_WINDOW_FULLSCREEN) != 0;
+}
+
+void Main_SetFullscreen(bool on) {
+  if (on == Main_IsFullscreen())
+    return;
+  if (on)
+    g_win_flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
+  else
+    g_win_flags &= ~SDL_WINDOW_FULLSCREEN_DESKTOP;
+  SDL_SetWindowFullscreen(g_window, g_win_flags & SDL_WINDOW_FULLSCREEN_DESKTOP);
+  g_cursor = !on;
+  SDL_ShowCursor(g_cursor);
+}
+
+int Main_GetRenderFlags() {
+  return g_ppu_render_flags;
+}
+
+void Main_SetRenderFlags(int flags) {
+  g_ppu_render_flags = flags;
+}
+
+bool Main_ShaderSupported() {
+  return g_config.output_method == kOutputMethod_OpenGL || g_config.output_method == kOutputMethod_OpenGL_ES;
+}
+
+bool OpenGLRenderer_SetShader(const char *path);
+
+bool Main_SetShader(const char *path) {
+  return Main_ShaderSupported() && OpenGLRenderer_SetShader(path);
+}
+
 static void SaveMenuAction(int action) {
   SDL_LockMutex(g_audio_mutex);
   SaveMenu_Input(action);
   SDL_UnlockMutex(g_audio_mutex);
 }
 
-static void HandleSaveMenuKey(int key, int mod) {
+static int SaveMenuActionForKey(int key, int mod) {
   int cmd = FindCmdForSdlKey(key, mod);
+  if (key == SDLK_TAB)
+    return (mod & KMOD_SHIFT) ? kSaveMenu_PrevTab : kSaveMenu_NextTab;
   if (key == SDLK_UP || cmd == kKeys_Controls + 0)
-    SaveMenuAction(kSaveMenu_Up);
-  else if (key == SDLK_DOWN || cmd == kKeys_Controls + 1)
-    SaveMenuAction(kSaveMenu_Down);
-  else if (key == SDLK_PAGEUP || key == SDLK_LEFT || cmd == kKeys_Controls + 2)
-    SaveMenuAction(kSaveMenu_PageUp);
-  else if (key == SDLK_PAGEDOWN || key == SDLK_RIGHT || cmd == kKeys_Controls + 3)
-    SaveMenuAction(kSaveMenu_PageDown);
-  else if (key == SDLK_RETURN || key == SDLK_KP_ENTER || cmd == kKeys_Controls + 5 || cmd == kKeys_Controls + 6)
-    SaveMenuAction(kSaveMenu_Ok);
-  else if (key == SDLK_ESCAPE || key == SDLK_BACKSPACE || cmd == kKeys_Controls + 7 || cmd == kKeys_SaveMenu)
-    SaveMenuAction(kSaveMenu_Back);
+    return kSaveMenu_Up;
+  if (key == SDLK_DOWN || cmd == kKeys_Controls + 1)
+    return kSaveMenu_Down;
+  if (key == SDLK_LEFT || cmd == kKeys_Controls + 2)
+    return kSaveMenu_Left;
+  if (key == SDLK_RIGHT || cmd == kKeys_Controls + 3)
+    return kSaveMenu_Right;
+  if (key == SDLK_PAGEUP)
+    return kSaveMenu_PageUp;
+  if (key == SDLK_PAGEDOWN)
+    return kSaveMenu_PageDown;
+  if (cmd == kKeys_Controls + 10)
+    return kSaveMenu_PrevTab;
+  if (cmd == kKeys_Controls + 11)
+    return kSaveMenu_NextTab;
+  if (key == SDLK_RETURN || key == SDLK_KP_ENTER || cmd == kKeys_Controls + 5 || cmd == kKeys_Controls + 6)
+    return kSaveMenu_Ok;
+  if (key == SDLK_DELETE || cmd == kKeys_Controls + 8)
+    return kSaveMenu_Clear;
+  if (key == SDLK_ESCAPE || key == SDLK_BACKSPACE || cmd == kKeys_Controls + 7 || cmd == kKeys_SaveMenu)
+    return kSaveMenu_Back;
+  return -1;
+}
+
+static bool HandleSaveMenuKeyRepeats(int key, int mod) {
+  int a = SaveMenuActionForKey(key, mod);
+  return a == kSaveMenu_Up || a == kSaveMenu_Down || a == kSaveMenu_Left || a == kSaveMenu_Right ||
+         a == kSaveMenu_PageUp || a == kSaveMenu_PageDown;
+}
+
+static void HandleSaveMenuKey(int key, int mod) {
+  int a = SaveMenuActionForKey(key, mod);
+  if (a >= 0)
+    SaveMenuAction(a);
 }
 
 // Uses the Xbox button convention: A accepts, B goes back.
 static void HandleSaveMenuGamepad(int button) {
+  // The combo that opens the menu also closes it.
+  if (button != kGamepadBtn_A && FindCmdForGamepadButton(button, g_gamepad_modifiers) == kKeys_SaveMenu) {
+    SaveMenuAction(kSaveMenu_Back);
+    return;
+  }
   switch (button) {
   case kGamepadBtn_DpadUp: SaveMenuAction(kSaveMenu_Up); break;
   case kGamepadBtn_DpadDown: SaveMenuAction(kSaveMenu_Down); break;
-  case kGamepadBtn_DpadLeft: case kGamepadBtn_L1: SaveMenuAction(kSaveMenu_PageUp); break;
-  case kGamepadBtn_DpadRight: case kGamepadBtn_R1: SaveMenuAction(kSaveMenu_PageDown); break;
+  case kGamepadBtn_DpadLeft: SaveMenuAction(kSaveMenu_Left); break;
+  case kGamepadBtn_DpadRight: SaveMenuAction(kSaveMenu_Right); break;
+  case kGamepadBtn_L1: SaveMenuAction(kSaveMenu_PrevTab); break;
+  case kGamepadBtn_R1: SaveMenuAction(kSaveMenu_NextTab); break;
   case kGamepadBtn_A: SaveMenuAction(kSaveMenu_Ok); break;
   case kGamepadBtn_B: SaveMenuAction(kSaveMenu_Back); break;
+  case kGamepadBtn_X: SaveMenuAction(kSaveMenu_Clear); break;
   case kGamepadBtn_Start:
     // The same combo that opens the menu (View+Start) closes it.
     SaveMenuAction((g_gamepad_modifiers & (1 << kGamepadBtn_Back)) ? kSaveMenu_Back : kSaveMenu_Ok);
@@ -1075,22 +1307,33 @@ static void HandleGamepadInput(int button, bool pressed) {
   if (!!(g_gamepad_modifiers & (1 << button)) == pressed)
     return;
   g_gamepad_modifiers ^= 1 << button;
+  if (SaveMenu_IsOpen()) {
+    if (OptMenu_IsCapturing()) {
+      SDL_LockMutex(g_audio_mutex);
+      OptMenu_CaptureButton(button, pressed);
+      SDL_UnlockMutex(g_audio_mutex);
+      if (pressed) {
+        g_gamepad_last_cmd[button] = 0;
+        return;
+      }
+    } else if (pressed) {
+      g_gamepad_last_cmd[button] = 0;
+      HandleSaveMenuGamepad(button);
+      return;
+    }
+  }
   if (pressed)
     g_gamepad_last_cmd[button] = FindCmdForGamepadButton(button, g_gamepad_modifiers);
   if (g_gamepad_last_cmd[button] != 0)
     HandleCommand(g_gamepad_last_cmd[button], pressed);
 }
 
+// Changes the game's own master volume (same as in the options menu).
 static void HandleVolumeAdjustment(int volume_adjustment) {
-#if SYSTEM_VOLUME_MIXER_AVAILABLE
-  int current_volume = GetApplicationVolume();
-  int new_volume = IntMin(IntMax(0, current_volume + volume_adjustment * 5), 100);
-  SetApplicationVolume(new_volume);
-  printf("[System Volume]=%i\n", new_volume);
-#else
-  g_sdl_audio_mixer_volume = IntMin(IntMax(0, g_sdl_audio_mixer_volume + volume_adjustment * (SDL_MIX_MAXVOLUME >> 4)), SDL_MIX_MAXVOLUME);
-  printf("[SDL mixer volume]=%i\n", g_sdl_audio_mixer_volume);
-#endif
+  int v = OptMenu_ChangeVolume(volume_adjustment);
+  char msg[48];
+  snprintf(msg, sizeof(msg), "Volumen: %d%%", v);
+  SaveMenu_ShowToast(msg);
 }
 
 // Approximates atan2(y, x) normalized to the [0,4) range
