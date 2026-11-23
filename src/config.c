@@ -530,6 +530,13 @@ static bool HandleIniConfig(int section, const char *key, char *value) {
     } else if (StringEqualsNoCase(key, "StickDeadzone")) {
       g_config.stick_deadzone = IntMin(IntMax(atoi(value), 5), 90);
       return true;
+    } else if (StringEqualsNoCase(key, "Discord")) {
+      return ParseBool(value, &g_config.discord);
+    } else if (StringEqualsNoCase(key, "DiscordLocation")) {
+      return ParseBool(value, &g_config.discord_location);
+    } else if (StringEqualsNoCase(key, "DiscordAppId")) {
+      g_config.discord_app_id = value;
+      return true;
     } else if (StringEqualsNoCase(key, "SaveHoldMs")) {
       g_config.save_hold_ms = IntMin(IntMax(atoi(value), 0), 5000);
       return true;
@@ -707,6 +714,9 @@ void ParseConfigFile(const char *filename) {
   g_config.stick_deadzone = 30;
   g_config.turbo_speed = 0;
   g_config.save_hold_ms = 1000;
+  g_config.discord = true;
+  g_config.discord_location = true;
+  g_config.discord_app_id = "1574572493212225667";
   SetDefaultKeys();
 
   if (filename != NULL || !ParseOneConfigFile("zelda3.user.ini", 0)) {

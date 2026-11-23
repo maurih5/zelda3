@@ -17,6 +17,7 @@
 
 #include "types.h"
 #include "variables.h"
+#include "discord.h"
 
 #include "zelda_rtl.h"
 #include "zelda_cpu_infra.h"
@@ -461,6 +462,8 @@ int main(int argc, char** argv) {
   ZeldaRewindConfigure(g_config.rewind_seconds, g_config.rewind_frame_interval);
   SaveMenu_Init(g_config.autosave_minutes, g_config.autosave_slots);
   Haptics_Configure(g_config.rumble_intensity);
+  Discord_Configure(g_config.discord, g_config.discord_location);
+  Discord_Init(g_config.discord_app_id);
   g_wide_hud = g_config.wide_hud;
 
   if (g_config.fullscreen == 1)
@@ -959,7 +962,7 @@ int main(int argc, char** argv) {
         printf("Volumen %d -> %d\n", vol0, g_config.volume);
         SelftestCheck(g_config.volume == vol0 - 20, "izquierda baja el volumen");
         SDL_LockMutex(g_audio_mutex);
-        for (int i = 0; i < 22; i++) SaveMenu_Input(kSaveMenu_Down);
+        for (int i = 0; i < 24; i++) SaveMenu_Input(kSaveMenu_Down);
         uint32 feat0 = g_config.features0;
         SaveMenu_Input(kSaveMenu_Ok);
         SDL_UnlockMutex(g_audio_mutex);
@@ -967,7 +970,7 @@ int main(int argc, char** argv) {
                       (g_wanted_zelda_features & kFeatures0_TurnWhileDashing), "A activa 'Girar al correr'");
         SelftestDumpMenu("selftest_opt2.bmp");
         SDL_LockMutex(g_audio_mutex);
-        for (int i = 0; i < 19; i++) SaveMenu_Input(kSaveMenu_Up);
+        for (int i = 0; i < 21; i++) SaveMenu_Input(kSaveMenu_Up);
         SaveMenu_Input(kSaveMenu_Ok);  // Shader (needs OpenGL)
         SDL_UnlockMutex(g_audio_mutex);
         SelftestDumpMenu("selftest_opt3.bmp");
@@ -1081,6 +1084,7 @@ SELFTEST_SCRIPT_DONE:;
 #endif
       ZeldaRewindCapture();
       SaveMenu_OnFramePlayed();
+      Discord_Update();
 #ifdef REWIND_SELFTEST
       double d = StNow() - st_t1;
       if (d > 0.00005) {  // only count real captures
@@ -1139,6 +1143,8 @@ SELFTEST_SCRIPT_DONE:;
   SDL_UnlockMutex(g_audio_mutex);
   if (g_config.autosave)
     HandleCommand(kKeys_Save + 0, true);
+
+  Discord_Shutdown();
 
   // clean sdl
   if (g_config.enable_audio) {

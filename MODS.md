@@ -54,6 +54,20 @@ Changes are applied immediately and saved to `zelda3.opciones.ini`, which is
 read after `zelda3.ini`, so your `zelda3.ini` is never rewritten.
 `VolumeUp` / `VolumeDown` change the in-game master volume.
 
+## Discord
+Shows "Playing A Link to the Past" in your Discord profile with the dungeon or
+map area, hearts, pendants/crystals and session time, talking directly to the
+Discord app's local IPC pipe (no SDK; nothing happens if Discord is closed).
+Both parts can be turned off in the options menu. The large image uses the
+asset named `logo` of the Discord application.
+
+```ini
+[General]
+Discord = 1
+DiscordLocation = 1
+DiscordAppId = 1574572493212225667   # your own Discord application id
+```
+
 ## Building on Windows without MSBuild
 `build_msvc.bat [out.exe] [extra defines]` builds with the Visual Studio Build
 Tools. It expects the SDL2 development package (VC) extracted to

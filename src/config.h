@@ -89,6 +89,9 @@ typedef struct Config {
   char *memory_buffer;
   const char *shader;
   const char *msu_path;
+  const char *discord_app_id;
+  bool discord;            // show what you're playing in Discord
+  bool discord_location;   // ... including where you are
   const char *language;
 } Config;
 

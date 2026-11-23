@@ -18,6 +18,7 @@
 #include "optmenu.h"
 #include "snes/ppu.h"
 #include "haptics.h"
+#include "discord.h"
 
 // ---------------------------------------------------------------------------
 // Option definitions
@@ -50,6 +51,8 @@ enum {
   kO_EdgeEffect,
   kO_WideHud,
   kO_Rumble,
+  kO_Discord,
+  kO_DiscordLocation,
   kO_Deadzone,
   kO_TurboSpeed,
   kO_SaveHold,
@@ -104,6 +107,9 @@ static const OptDef kOptions[] = {
   { kT_Header, 0, "Joystick", NULL },
   { kT_Slider, kO_Rumble, "Vibración", "Fuerza de la vibración con espadazos, golpes, daño, ítems, bombas y cofres. 0 la apaga." },
   { kT_Slider, kO_Deadzone, "Zona muerta del stick", "Cuánto hay que mover el stick antes de que Link camine. Subila si Link se mueve solo." },
+  { kT_Header, 0, "Discord", NULL },
+  { kT_Toggle, kO_Discord, "Mostrar en Discord", "Muestra en tu perfil de Discord que estás jugando, con corazones, cristales y tiempo de juego." },
+  { kT_Toggle, kO_DiscordLocation, "Mostrar dónde estás", "Incluye en Discord el dungeon o la zona del mapa en la que estás." },
   { kT_Header, 0, "Rebobinado, avance y autoguardado", NULL },
   { kT_Slider, kO_TurboSpeed, "Avance rápido", "Velocidad mientras mantenés la tecla de avance rápido." },
   { kT_Slider, kO_RewindSeconds, "Rebobinado", "Cuántos segundos se pueden rebobinar. Cambiarlo borra el historial actual." },
@@ -297,6 +303,8 @@ static int GetValue(int id) {
   case kO_AutosaveSlots: return g_config.autosave_slots;
   case kO_EdgeEffect: return g_config.edge_effect;
   case kO_WideHud: return g_config.wide_hud;
+  case kO_Discord: return g_config.discord;
+  case kO_DiscordLocation: return g_config.discord_location;
   case kO_Rumble: return g_config.rumble_intensity;
   case kO_Deadzone: return g_config.stick_deadzone;
   case kO_TurboSpeed: return g_config.turbo_speed < 2 ? 1 : g_config.turbo_speed;
@@ -479,6 +487,16 @@ static void ChangeOption(int id, int dir) {
   case kO_WideHud:
     g_config.wide_hud = g_wide_hud = on;
     SaveInt("Graphics", "WideHud", on);
+    break;
+  case kO_Discord:
+    g_config.discord = on;
+    Discord_Configure(g_config.discord, g_config.discord_location);
+    SaveInt("General", "Discord", on);
+    break;
+  case kO_DiscordLocation:
+    g_config.discord_location = on;
+    Discord_Configure(g_config.discord, g_config.discord_location);
+    SaveInt("General", "DiscordLocation", on);
     break;
   case kO_NoSpriteLimits:
     SetRenderFlag(kPpuRenderFlags_NoSpriteLimits, on, &g_config.no_sprite_limits, "NoSpriteLimits");
