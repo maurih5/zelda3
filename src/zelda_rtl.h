@@ -70,6 +70,15 @@ void ZeldaWriteSram();
 void ZeldaReadSram();
 
 // Rewind support (in-memory ring buffer of delta-compressed states)
+// Per drawn line: the iris/spotlight span used in widescreen (x relative to
+// the 256 px picture), so overlays can keep the outside of the circle black.
+typedef struct IrisDrawnLine {
+  bool valid;
+  int16 left, right;
+} IrisDrawnLine;
+extern IrisDrawnLine g_iris_drawn[256];
+extern bool g_wide_hud;  // widescreen: push the HUD to the sides
+
 void ZeldaRewindConfigure(int seconds, int frame_interval);
 void ZeldaRewindCapture();     // call after each normally emulated frame
 bool ZeldaRewindStep();        // go back one state. false = rewind not possible now (e.g. replay)

@@ -38,6 +38,7 @@ void SaveMenu_SelftestSetInterval(int frames);
 const char *SaveMenu_SelftestSelectedPath();
 int SaveMenu_SelftestNumEntries();
 static int g_st_frame, g_st_dump_frame, g_st_toast_dump_at = -1, g_st_failures;
+static char g_st_dump_name[64] = "selftest_toast.bmp";
 static struct { char path[64]; uint32 hash; } g_st_saves[128];
 static int g_st_nsaves;
 
@@ -287,9 +288,23 @@ static void DrawPpuFrameWithPerf() {
 #endif
   if (g_config.edge_effect && render_scale == 1 && g_zenv.ppu->extraLeftRight && !g_zenv.ppu->forcedBlank) {
     Ppu *ppu = g_zenv.ppu;
-    EdgeEffect_Apply(pixel_buffer, pitch, g_snes_width, g_snes_height,
-                     ppu->extraLeftRight - ppu->extraLeftCur, ppu->extraLeftRight - ppu->extraRightCur);
+    int lb = ppu->extraLeftRight - ppu->extraLeftCur, rb = ppu->extraLeftRight - ppu->extraRightCur;
+    EdgeEffect_Apply(pixel_buffer, pitch, g_snes_width, g_snes_height, lb, rb);
+    // During an iris/spotlight, the filled bars stay black outside the circle.
+    for (int y = 0; y < g_snes_height && y < 256; y++) {
+      if (!g_iris_drawn[y].valid)
+        continue;
+      uint32 *row = (uint32 *)(pixel_buffer + (size_t)y * pitch);
+      int l = g_iris_drawn[y].left + ppu->extraLeftRight, r = g_iris_drawn[y].right + ppu->extraLeftRight;
+      for (int x = 0; x < lb; x++)
+        if (x < l || x > r) row[x] = 0;
+      for (int x = g_snes_width - rb; x < g_snes_width; x++)
+        if (x < l || x > r) row[x] = 0;
+    }
   }
+  // The widescreen HUD goes on top, after the side bars are filled.
+  if (render_scale == 1)
+    PpuRedrawHudOverlay(g_zenv.ppu, pixel_buffer, pitch);
   SaveMenu_CaptureFrame(pixel_buffer, pitch, render_scale, g_snes_width, g_snes_height);
   SaveMenu_DrawOverlay(pixel_buffer, pitch, render_scale, g_snes_width, g_snes_height);
   if (g_display_perf)
@@ -297,7 +312,7 @@ static void DrawPpuFrameWithPerf() {
 #ifdef SAVEMENU_SELFTEST
   if (g_st_dump_frame) {
     g_st_dump_frame = 0;
-    SelftestWriteBmp("selftest_toast.bmp", pixel_buffer, pitch, g_snes_width * render_scale, g_snes_height * render_scale);
+    SelftestWriteBmp(g_st_dump_name, pixel_buffer, pitch, g_snes_width * render_scale, g_snes_height * render_scale);
   }
 #endif
   g_renderer_funcs.EndDraw();
@@ -440,6 +455,7 @@ int main(int argc, char** argv) {
   ZeldaRewindConfigure(g_config.rewind_seconds, g_config.rewind_frame_interval);
   SaveMenu_Init(g_config.autosave_minutes, g_config.autosave_slots);
   Haptics_Configure(g_config.rumble_intensity);
+  g_wide_hud = g_config.wide_hud;
 
   if (g_config.fullscreen == 1)
     g_win_flags ^= SDL_WINDOW_FULLSCREEN_DESKTOP;
@@ -717,6 +733,43 @@ int main(int argc, char** argv) {
     {
       static uint32 rng = 777, cur_in;
       int f = g_st_frame;
+      if (getenv("ZELDA3_SELFTEST_SCRIPT")) {
+        // Scripted run to look at specific moments. ';' separated:
+        //   load            load saves/save0.sav at the start (otherwise the game boots)
+        //   press:BTN@N-M   hold BTN (A B X Y L R Start Select Up Down Left Right) from frame N to M
+        //   kill@N          set Link's health to 0
+        //   dump:NAME@N     save the drawn frame N to NAME.bmp
+        //   end@N           quit
+        static const char *const kBtn[12] = { "B", "Y", "Select", "Start", "Up", "Down", "Left", "Right", "A", "X", "L", "R" };
+        char spec[1024];
+        snprintf(spec, sizeof(spec), "%s", getenv("ZELDA3_SELFTEST_SCRIPT"));
+        if (f == 0)
+          g_config.disable_frame_delay = true;
+        inputs = 0;
+        for (char *tok = strtok(spec, ";"); tok; tok = strtok(NULL, ";")) {
+          int a = -1, b = -1;
+          char name[64];
+          if (f == 0 && strcmp(tok, "load") == 0) {
+            HandleCommand(kKeys_Load + 0, true);
+            HandleCommand(kKeys_ClearKeyLog, true);
+          } else if (sscanf(tok, "press:%63[^@]@%d-%d", name, &a, &b) == 3) {
+            for (int i = 0; i < 12; i++)
+              if (strcmp(name, kBtn[i]) == 0 && f >= a && f <= b)
+                inputs |= 1 << i;
+          } else if (sscanf(tok, "kill@%d", &a) == 1 && f == a) {
+            link_give_damage = 0xa0;  // more than any health
+          } else if (sscanf(tok, "dump:%40[^@]@%d", name, &a) == 2 && f == a) {
+            snprintf(g_st_dump_name, sizeof(g_st_dump_name), "%s.bmp", name);
+            g_st_dump_frame = 1;
+          } else if (sscanf(tok, "end@%d", &a) == 1 && f >= a) {
+            printf("SCRIPT end at %d (module %d)\n", f, main_module_index);
+            fflush(stdout);
+            exit(0);
+          }
+        }
+        g_st_frame++;
+        goto SELFTEST_SCRIPT_DONE;
+      }
       if (f == 0 && getenv("ZELDA3_SELFTEST_SEED")) rng = atoi(getenv("ZELDA3_SELFTEST_SEED"));
       if (f == 0) {
         g_config.disable_frame_delay = true;
@@ -892,7 +945,7 @@ int main(int argc, char** argv) {
         printf("Volumen %d -> %d\n", vol0, g_config.volume);
         SelftestCheck(g_config.volume == vol0 - 20, "izquierda baja el volumen");
         SDL_LockMutex(g_audio_mutex);
-        for (int i = 0; i < 20; i++) SaveMenu_Input(kSaveMenu_Down);
+        for (int i = 0; i < 21; i++) SaveMenu_Input(kSaveMenu_Down);
         uint32 feat0 = g_config.features0;
         SaveMenu_Input(kSaveMenu_Ok);
         SDL_UnlockMutex(g_audio_mutex);
@@ -900,7 +953,7 @@ int main(int argc, char** argv) {
                       (g_wanted_zelda_features & kFeatures0_TurnWhileDashing), "A activa 'Girar al correr'");
         SelftestDumpMenu("selftest_opt2.bmp");
         SDL_LockMutex(g_audio_mutex);
-        for (int i = 0; i < 17; i++) SaveMenu_Input(kSaveMenu_Up);
+        for (int i = 0; i < 18; i++) SaveMenu_Input(kSaveMenu_Up);
         SaveMenu_Input(kSaveMenu_Ok);  // Shader (needs OpenGL)
         SDL_UnlockMutex(g_audio_mutex);
         SelftestDumpMenu("selftest_opt3.bmp");
@@ -958,6 +1011,7 @@ int main(int argc, char** argv) {
       }
       g_st_frame++;
     }
+SELFTEST_SCRIPT_DONE:;
 #endif
 
     bool is_replay = false;

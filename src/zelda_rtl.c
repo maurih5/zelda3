@@ -1,6 +1,7 @@
 #include "zelda_rtl.h"
 #include <stddef.h>
 #include "variables.h"
+#include "load_gfx.h"
 #include "misc.h"
 #include "nmi.h"
 #include "poly.h"
@@ -174,6 +175,31 @@ static void ConfigurePpuSideSpace() {
   PpuSetExtraSideSpace(g_zenv.ppu, extra_left, extra_right, extra_bottom);
 }
 
+IrisDrawnLine g_iris_drawn[256];
+bool g_wide_hud = true;
+
+// Widescreen HUD: while the normal HUD is up, draw its left part (magic,
+// item, counters) against the left side of the picture and the life meter
+// against the right side. The HUD is BG3 tile rows 0-7; the life meter starts
+// at column 20.
+static void ConfigureHudSplit() {
+  Ppu *ppu = g_zenv.ppu;
+  int lines = 0;
+  if (g_wide_hud && ppu->extraLeftRight != 0 && ppu->bgLayer[2].hScroll == 0 && ppu->bgLayer[2].vScroll == 0) {
+    // Gameplay modules that show the normal HUD: loading areas (6, 8, 10),
+    // dungeon/overworld (7, 9, 11), spotlight close/open (15, 16), falling (17),
+    // boss victory (19), mirror (21), fairy refill (22), and text messages.
+    static const uint32 kHudModules = 1 << 6 | 1 << 7 | 1 << 8 | 1 << 9 | 1 << 10 | 1 << 11 |
+        1 << 15 | 1 << 16 | 1 << 17 | 1 << 19 | 1 << 21 | 1 << 22;
+    int mod = main_module_index;
+    if (mod == 14 && submodule_index == 2)
+      mod = saved_module_for_menu;
+    if (mod < 32 && (kHudModules >> mod & 1))
+      lines = 8 * 8 + 1;  // display lines are numbered from 1
+  }
+  PpuSetHudSplit(ppu, lines, 20 * 8, ppu->extraLeftRight);
+}
+
 void ZeldaDrawPpuFrame(uint8 *pixel_buffer, size_t pitch, uint32 render_flags) {
   SimpleHdma hdma_chans[2];
 
@@ -198,10 +224,33 @@ void ZeldaDrawPpuFrame(uint8 *pixel_buffer, size_t pitch, uint32 render_flags) {
 
   if (g_zenv.ppu->extraLeftRight != 0 || render_flags & kPpuRenderFlags_Height240)
     ConfigurePpuSideSpace();
+  ConfigureHudSplit();
 
   int height = render_flags & kPpuRenderFlags_Height240 ? 240 : 224;
 
+  bool wide_iris = (enhanced_features0 & kFeatures0_WidescreenVisualFixes) && g_zenv.ppu->extraLeftRight != 0;
+
   for (int i = 0; i <= height; i++) {
+    if (wide_iris) {
+      // Use the unclamped iris span for this line while the window registers
+      // still hold the value the game computed for it.
+      Ppu *ppu = g_zenv.ppu;
+      uint16 cur = ppu->window1left | ppu->window1right << 8;
+      const IrisWideLine *w = NULL;
+      for (int d = 0; d <= 1 && !w; d++) {
+        int l = i - d;
+        if (l >= 0 && l < 240 && g_iris_wide[l].valid && g_iris_wide[l].word == cur && hdma_table_dynamic[l] == cur)
+          w = &g_iris_wide[l];
+      }
+      PpuSetWideWindow1(ppu, w != NULL, w ? w->left : 0, w ? w->right : 0);
+      if (i < 256) {
+        g_iris_drawn[i].valid = w != NULL;
+        g_iris_drawn[i].left = w ? w->left : 0;
+        g_iris_drawn[i].right = w ? w->right : 0;
+      }
+    } else if (i < 256) {
+      g_iris_drawn[i].valid = false;
+    }
     if (i == 128 && irq_flag) {
       zelda_ppu_write(BG3HOFS, selectfile_var8);
       zelda_ppu_write(BG3HOFS, selectfile_var8 >> 8);
@@ -216,6 +265,7 @@ void ZeldaDrawPpuFrame(uint8 *pixel_buffer, size_t pitch, uint32 render_flags) {
     SimpleHdma_DoLine(&hdma_chans[0]);
     SimpleHdma_DoLine(&hdma_chans[1]);
   }
+  PpuSetWideWindow1(g_zenv.ppu, false, 0, 0);
 }
 
 void HdmaSetup(uint32 addr6, uint32 addr7, uint8 transfer_unit, uint8 reg6, uint8 reg7, uint8 indirect_bank) {

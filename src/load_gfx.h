@@ -91,6 +91,12 @@ void Trinexx_UnflashShellPalette_Blue();
 void IrisSpotlight_close();
 void Spotlight_open();
 void SpotlightInternal(uint8 x, uint8 y);
+typedef struct IrisWideLine {
+  uint16 word;           // the clamped value written to hdma_table_dynamic
+  int16 left, right;     // the unclamped span
+  bool valid;
+} IrisWideLine;
+extern IrisWideLine g_iris_wide[240];
 void IrisSpotlight_ConfigureTable();
 void IrisSpotlight_ResetTable();
 uint16 IrisSpotlight_CalculateCircleValue(uint8 a);

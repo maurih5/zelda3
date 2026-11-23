@@ -75,12 +75,19 @@ launcher (MIT), reimplemented natively. All of them are in the in-game Options t
   bombs, chests, pits, ledges, deep water, mirror warps and defeated bosses.
 - **Fast dialog**: hold A to type text at double speed; B writes the rest of the
   box at once (without also advancing it).
+- **Widescreen HUD**: magic, item and counters at the left edge, life meter
+  at the right edge, instead of squeezed in the middle 256 px
+  ([#322](https://github.com/snesrev/zelda3/issues/322), [#142](https://github.com/snesrev/zelda3/issues/142)).
+- **Widescreen iris**: the iris/spotlight circle uses its real width instead of
+  being cut flat at the sides of the 256 px picture, and the opening circle keeps
+  growing until it covers the whole widescreen picture.
 - **Turbo speed**, **stick dead zone** and a **3:2** aspect ratio
   ([#311](https://github.com/snesrev/zelda3/issues/311)).
 
 ```ini
 [Graphics]
 EdgeEffect = 1
+WideHud = 1
 [General]
 Rumble = 70           # 0-100, 0 = off
 StickDeadzone = 30    # percent

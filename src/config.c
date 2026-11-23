@@ -442,6 +442,8 @@ static bool HandleIniConfig(int section, const char *key, char *value) {
       return ParseBoolBit(value, &g_config.features0, kFeatures0_DimFlashes);
     } else if (StringEqualsNoCase(key, "EdgeEffect")) {
       return ParseBool(value, &g_config.edge_effect);
+    } else if (StringEqualsNoCase(key, "WideHud")) {
+      return ParseBool(value, &g_config.wide_hud);
     }
   } else if (section == 2) {
     if (StringEqualsNoCase(key, "EnableAudio")) {
@@ -697,6 +699,7 @@ void ParseConfigFile(const char *filename) {
   g_config.autosave_minutes = 5;
   g_config.autosave_slots = 10;
   g_config.edge_effect = true;
+  g_config.wide_hud = true;
   g_config.rumble_intensity = 70;
   g_config.stick_deadzone = 30;
   g_config.turbo_speed = 0;

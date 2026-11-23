@@ -79,6 +79,7 @@ typedef struct Config {
   int autosave_minutes;
   int autosave_slots;
   bool edge_effect;        // fill widescreen side bars with a blurred mirror
+  bool wide_hud;           // widescreen: HUD at the sides of the picture
   int rumble_intensity;    // 0-100, 0 = off
   int stick_deadzone;      // percent of the stick range
   int turbo_speed;         // game frames per shown frame while Turbo is held, 0 = as fast as possible

@@ -48,6 +48,7 @@ enum {
   kO_AutosaveSlots,
   kO_Aspect,
   kO_EdgeEffect,
+  kO_WideHud,
   kO_Rumble,
   kO_Deadzone,
   kO_TurboSpeed,
@@ -91,6 +92,7 @@ static const OptDef kOptions[] = {
   { kT_Header, 0, "Imagen", NULL },
   { kT_Shader, kO_Shader, "Shader", "A: elegir un shader de la carpeta glsl-shaders. Se aplica en el momento." },
   { kT_Choice, kO_Aspect, "Formato de pantalla", "Ancho de la imagen. Se aplica al reiniciar el juego." },
+  { kT_Toggle, kO_WideHud, "HUD en los bordes", "En pantalla ancha, lleva la magia y los ítems a la izquierda y los corazones a la derecha." },
   { kT_Toggle, kO_EdgeEffect, "Rellenar bordes", "En pantalla ancha, rellena las franjas negras con un reflejo borroso de la escena." },
   { kT_Toggle, kO_Fullscreen, "Pantalla completa", "Alternar entre ventana y pantalla completa." },
   { kT_Toggle, kO_KeepAspect, "Mantener proporción", "Si se desactiva, la imagen se estira para llenar la pantalla." },
@@ -292,6 +294,7 @@ static int GetValue(int id) {
   case kO_AutosaveMinutes: return g_config.autosave_minutes;
   case kO_AutosaveSlots: return g_config.autosave_slots;
   case kO_EdgeEffect: return g_config.edge_effect;
+  case kO_WideHud: return g_config.wide_hud;
   case kO_Rumble: return g_config.rumble_intensity;
   case kO_Deadzone: return g_config.stick_deadzone;
   case kO_TurboSpeed: return g_config.turbo_speed < 2 ? 1 : g_config.turbo_speed;
@@ -459,6 +462,10 @@ static void ChangeOption(int id, int dir) {
   case kO_EdgeEffect:
     g_config.edge_effect = on;
     SaveInt("Graphics", "EdgeEffect", on);
+    break;
+  case kO_WideHud:
+    g_config.wide_hud = g_wide_hud = on;
+    SaveInt("Graphics", "WideHud", on);
     break;
   case kO_NoSpriteLimits:
     SetRenderFlag(kPpuRenderFlags_NoSpriteLimits, on, &g_config.no_sprite_limits, "NoSpriteLimits");

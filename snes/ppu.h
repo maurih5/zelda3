@@ -53,6 +53,17 @@ struct Ppu {
   uint32_t renderPitch;
   uint8_t *renderBuffer;
   uint8_t extraLeftCur, extraRightCur, extraLeftRight, extraBottomCur;
+  // Window 1 edges wider than the 8-bit registers allow, for the current line
+  // (widescreen iris / spotlight). Only used while win1Wide is set.
+  bool win1Wide;
+  int16_t win1WideLeft, win1WideRight;
+  // Widescreen HUD: on BG3 lines < hudSplitLines, BG3 columns [0, hudSplitX)
+  // are drawn hudSplitShift px to the left and the rest hudSplitShift px to the
+  // right, on top of everything. hudOverlay keeps those pixels (bit 24 set) so
+  // they can be drawn again after post-processing the side bars.
+  uint8_t hudSplitLines;
+  int16_t hudSplitX, hudSplitShift;
+  uint32_t *hudOverlay;
   float mode7PerspectiveLow, mode7PerspectiveHigh;
 
   // TMW / TSW etc
@@ -142,5 +153,9 @@ int PpuGetCurrentRenderScale(Ppu *ppu, uint32_t render_flags);
 
 void PpuSetMode7PerspectiveCorrection(Ppu *ppu, int low, int high);
 void PpuSetExtraSideSpace(Ppu *ppu, int left, int right, int bottom);
+void PpuSetWideWindow1(Ppu *ppu, bool on, int left, int right);
+void PpuSetHudSplit(Ppu *ppu, int lines, int split_x, int shift);
+// Draws the saved widescreen HUD pixels again over a finished frame.
+void PpuRedrawHudOverlay(Ppu *ppu, uint8_t *pixels, size_t pitch);
 
 #endif  // ZELDA3_SNES_PPU_H_

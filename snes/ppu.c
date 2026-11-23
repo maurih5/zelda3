@@ -36,6 +36,9 @@ enum {
 Ppu* ppu_init() {
   Ppu* ppu = (Ppu * )malloc(sizeof(Ppu));
   ppu->extraLeftRight = kPpuExtraLeftRight;
+  ppu->hudSplitLines = 0;
+  ppu->hudOverlay = NULL;
+  ppu->win1Wide = false;
   return ppu;
 }
 
@@ -201,9 +204,15 @@ typedef struct PpuWindows {
   uint8 bits;
 } PpuWindows;
 
+static int16 g_hud_edge_l, g_hud_edge_r;
+static bool ppu_getWindowState(Ppu* ppu, int layer, int x);
+static bool g_hud_edges;
+
 static void PpuWindows_Clear(PpuWindows *win, Ppu *ppu, uint layer) {
   win->edges[0] = -(layer != 2 ? ppu->extraLeftCur : 0);
   win->edges[1] = 256 + (layer != 2 ? ppu->extraRightCur : 0);
+  if (g_hud_edges && layer == 2)
+    win->edges[0] = g_hud_edge_l, win->edges[1] = g_hud_edge_r;
   win->nr = 1;
   win->bits = 0;
 }
@@ -219,14 +228,20 @@ static void PpuWindows_Calc(PpuWindows *win, Ppu *ppu, uint layer) {
   win->edges[1] = window_right;
   uint i, j;
   int t;
-  bool w1_ena = (winflags & kWindow1Enabled) && ppu->window1left <= ppu->window1right;
+  int w1l = ppu->window1left, w1r = ppu->window1right;
+  if (ppu->win1Wide) {
+    // Clamp to the drawn area so the edge search below always finds them.
+    w1l = IntMax(ppu->win1WideLeft, win->edges[0]);
+    w1r = IntMin(ppu->win1WideRight, window_right - 1);
+  }
+  bool w1_ena = (winflags & kWindow1Enabled) && w1l <= w1r;
   if (w1_ena) {
-    if (ppu->window1left > win->edges[0]) {
-      win->edges[nr] = ppu->window1left;
+    if (w1l > win->edges[0]) {
+      win->edges[nr] = w1l;
       win->edges[++nr] = window_right;
     }
-    if (ppu->window1right + 1 < window_right) {
-      win->edges[nr] = ppu->window1right + 1;
+    if (w1r + 1 < window_right) {
+      win->edges[nr] = w1r + 1;
       win->edges[++nr] = window_right;
     }
   }
@@ -253,8 +268,8 @@ static void PpuWindows_Calc(PpuWindows *win, Ppu *ppu, uint layer) {
   // get a bitmap of how regions map to windows
   uint8 w1_bits = 0, w2_bits = 0;
   if (w1_ena) {
-    for (i = 0; win->edges[i] != ppu->window1left; i++);
-    for (j = i; win->edges[j] != ppu->window1right + 1; j++);
+    for (i = 0; win->edges[i] != w1l; i++);
+    for (j = i; win->edges[j] != w1r + 1; j++);
     w1_bits = ((1 << (j - i)) - 1) << i;
   }
   if ((winflags & (kWindow1Enabled | kWindow1Inversed)) == (kWindow1Enabled | kWindow1Inversed))
@@ -692,6 +707,12 @@ void PpuSetMode7PerspectiveCorrection(Ppu *ppu, int low, int high) {
   ppu->mode7PerspectiveHigh = 1.0f / high;
 }
 
+void PpuSetWideWindow1(Ppu *ppu, bool on, int left, int right) {
+  ppu->win1Wide = on;
+  ppu->win1WideLeft = left;
+  ppu->win1WideRight = right;
+}
+
 void PpuSetExtraSideSpace(Ppu *ppu, int left, int right, int bottom) {
   ppu->extraLeftCur = UintMin(left, ppu->extraLeftRight);
   ppu->extraRightCur = UintMin(right, ppu->extraLeftRight);
@@ -829,7 +850,7 @@ static void PpuDrawBackgrounds(Ppu *ppu, int y, bool sub) {
 
     if (IS_MOSAIC_ENABLED(ppu, 2))
       PpuDrawBackground_2bpp_mosaic(ppu, y, sub, 2, 0xf200, 0x1200);
-    else
+    else if (!(y < ppu->hudSplitLines))  // else drawn by PpuDrawHudSplit
       PpuDrawBackground_2bpp(ppu, y, sub, 2, 0xf200, 0x1200);
   } else {
     // mode 7
@@ -839,11 +860,82 @@ static void PpuDrawBackgrounds(Ppu *ppu, int y, bool sub) {
   }
 }
 
+// Draws the HUD (BG3) of this line split in two halves pushed towards the
+// sides of a widescreen picture, on top of the finished line.
+static void PpuDrawHudSplit(Ppu *ppu, uint y, uint32 *dst_org) {
+  if (ppu->hudOverlay)
+    memset(ppu->hudOverlay + (size_t)(y - 1) * kPpuXPixels, 0, kPpuXPixels * sizeof(uint32));
+  if (!IS_SCREEN_ENABLED(ppu, 0, 2) || IS_MOSAIC_ENABLED(ppu, 2))
+    return;
+  // With a window on BG3 (an iris), the HUD is masked where it ends up.
+  bool windowed = IS_SCREEN_WINDOWED(ppu, 0, 2) != 0;
+  // Draw into the (already used) subscreen buffer as if BG3 was on it.
+  uint8 se = ppu->screenEnabled[1], sw = ppu->screenWindowed[1];
+  ppu->screenEnabled[1] = ppu->screenEnabled[0];
+  ppu->screenWindowed[1] = 0;
+  ClearBackdrop(&ppu->bgBuffers[1]);
+  BgLayer *bg = &ppu->bgLayer[2];
+  uint16 hs = bg->hScroll;
+  int split = ppu->hudSplitX, shift = ppu->hudSplitShift;
+  g_hud_edges = true;
+  g_hud_edge_l = -shift, g_hud_edge_r = split - shift;
+  bg->hScroll = hs + shift;
+  PpuDrawBackground_2bpp(ppu, y, true, 2, 0xf200, 0x1200);
+  g_hud_edge_l = split + shift, g_hud_edge_r = 256 + shift;
+  bg->hScroll = hs - shift;
+  PpuDrawBackground_2bpp(ppu, y, true, 2, 0xf200, 0x1200);
+  bg->hScroll = hs;
+  g_hud_edges = false;
+  ppu->screenEnabled[1] = se;
+  ppu->screenWindowed[1] = sw;
+
+  int width = 256 + ppu->extraLeftRight * 2;
+  uint32 *ov = ppu->hudOverlay ? ppu->hudOverlay + (size_t)(y - 1) * kPpuXPixels : NULL;
+  for (int x = 0; x < width; x++) {
+    PpuZbufType v = ppu->bgBuffers[1].data[x - ppu->extraLeftRight + kPpuExtraLeftRight];
+    uint32 out = 0;
+    if (((v >> 8) & 0xf) == 2 && (v & 0xff) != 0 && !(windowed && ppu_getWindowState(ppu, 2, x - ppu->extraLeftRight))) {
+      uint32 color = ppu->cgram[v & 0xff];
+      out = ppu->brightnessMult[color & 0x1f] << 16 | ppu->brightnessMult[(color >> 5) & 0x1f] << 8 |
+            ppu->brightnessMult[(color >> 10) & 0x1f];
+      out |= 1 << 24;  // drawn by PpuRedrawHudOverlay, after any post-processing
+    }
+    if (ov)
+      ov[x] = out;
+  }
+}
+
+void PpuSetHudSplit(Ppu *ppu, int lines, int split_x, int shift) {
+  if (lines > 64) lines = 64;
+  if (lines && !ppu->hudOverlay)
+    ppu->hudOverlay = (uint32_t *)calloc((size_t)64 * kPpuXPixels, sizeof(uint32_t));
+  if (lines && ppu->hudOverlay && lines != ppu->hudSplitLines)
+    memset(ppu->hudOverlay, 0, (size_t)64 * kPpuXPixels * sizeof(uint32_t));
+  ppu->hudSplitLines = lines;
+  ppu->hudSplitX = split_x;
+  ppu->hudSplitShift = shift;
+}
+
+void PpuRedrawHudOverlay(Ppu *ppu, uint8_t *pixels, size_t pitch) {
+  if (!ppu->hudSplitLines || !ppu->hudOverlay)
+    return;
+  int width = 256 + ppu->extraLeftRight * 2;
+  for (int y = 1; y < ppu->hudSplitLines; y++) {
+    uint32 *dst = (uint32 *)(pixels + (size_t)(y - 1) * pitch);
+    const uint32 *ov = ppu->hudOverlay + (size_t)(y - 1) * kPpuXPixels;
+    for (int x = 0; x < width; x++)
+      if (ov[x] & (1 << 24))
+        dst[x] = ov[x] & 0xffffff;
+  }
+}
+
 static NOINLINE void PpuDrawWholeLine(Ppu *ppu, uint y) {
   if (ppu->forcedBlank) {
     uint8 *dst = &ppu->renderBuffer[(y - 1) * ppu->renderPitch];
     size_t n = sizeof(uint32) * (256 + ppu->extraLeftRight * 2);
     memset(dst, 0, n);
+    if (y < ppu->hudSplitLines && ppu->hudOverlay)
+      memset(ppu->hudOverlay + (size_t)(y - 1) * kPpuXPixels, 0, kPpuXPixels * sizeof(uint32));
     return;
   }
 
@@ -945,6 +1037,9 @@ static NOINLINE void PpuDrawWholeLine(Ppu *ppu, uint y) {
   if (ppu->extraLeftRight - ppu->extraRightCur != 0)
     memset(dst_org + (256 + ppu->extraLeftRight * 2 - (ppu->extraLeftRight - ppu->extraRightCur)), 0,
         sizeof(uint32) * (ppu->extraLeftRight - ppu->extraRightCur));
+
+  if (y < ppu->hudSplitLines)
+    PpuDrawHudSplit(ppu, y, dst_org);
 }
 
 static void ppu_handlePixel(Ppu* ppu, int x, int y) {
@@ -1221,15 +1316,17 @@ static bool ppu_getWindowState(Ppu* ppu, int layer, int x) {
   if (!(winflags & kWindow1Enabled) && !(winflags & kWindow2Enabled)) {
     return false;
   }
+  int w1l = ppu->win1Wide ? ppu->win1WideLeft : ppu->window1left;
+  int w1r = ppu->win1Wide ? ppu->win1WideRight : ppu->window1right;
   if ((winflags & kWindow1Enabled) && !(winflags & kWindow2Enabled)) {
-    bool test = x >= ppu->window1left && x <= ppu->window1right;
+    bool test = x >= w1l && x <= w1r;
     return (winflags & kWindow1Inversed) ? !test : test;
   }
   if (!(winflags & kWindow1Enabled) && (winflags & kWindow2Enabled)) {
     bool test = x >= ppu->window2left && x <= ppu->window2right;
     return (winflags & kWindow2Inversed) ? !test : test;
   }
-  bool test1 = x >= ppu->window1left && x <= ppu->window1right;
+  bool test1 = x >= w1l && x <= w1r;
   bool test2 = x >= ppu->window2left && x <= ppu->window2right;
   if (winflags & kWindow1Inversed) test1 = !test1;
   if (winflags & kWindow2Inversed) test2 = !test2;

@@ -1,5 +1,7 @@
 #include "zelda_rtl.h"
 #include "variables.h"
+#include "snes/ppu.h"
+#include "features.h"
 #include "snes/snes_regs.h"
 #include "overworld.h"
 #include "load_gfx.h"
@@ -1446,6 +1448,14 @@ void SpotlightInternal(uint8 x, uint8 y) {  // 80f29d
   INIDISP_copy = 0xf;
 }
 
+// Widescreen: the iris/spotlight window is clamped to 0..255 by the 8-bit
+// window registers, so in a wider view it was cut flat at the sides of the
+// 256 px picture. Keep the real span of every line here; the renderer uses it
+// while the table still holds the word written for that line.
+// (Idea from the Relic of the Past launcher.)
+IrisWideLine g_iris_wide[240];
+static int16 g_iris_span_left, g_iris_span_right;
+
 void IrisSpotlight_ConfigureTable() {  // 80f312
   uint16 r14 = link_y_coord - BG2VOFS_copy2 + 12;
   spotlight_y_lower = r14 - spotlight_var1;
@@ -1464,10 +1474,14 @@ void IrisSpotlight_ConfigureTable() {  // 80f312
         spotlight_var4--;
       r8 = IrisSpotlight_CalculateCircleValue(t);
     }
-    if (r4 < 240)
+    if (r4 < 240) {
       hdma_table_dynamic[r4] = r8;
-    if (r6 < 240)
+      g_iris_wide[r4] = (IrisWideLine){ r8, g_iris_span_left, g_iris_span_right, r8 != 0xff };
+    }
+    if (r6 < 240) {
       hdma_table_dynamic[r6] = r8;
+      g_iris_wide[r6] = (IrisWideLine){ r8, g_iris_span_left, g_iris_span_right, r8 != 0xff };
+    }
     if (r4 == r14)
       break;
     r4++, r6--;
@@ -1480,8 +1494,23 @@ void IrisSpotlight_ConfigureTable() {  // 80f312
 
   spotlight_var1 += kSpotlight_delta_size[spotlight_var2 >> 1];
 
-  if (spotlight_var1 != kSpotlight_goal[spotlight_var2 >> 1])
+  if ((enhanced_features0 & kFeatures0_WidescreenVisualFixes) && spotlight_var2 &&
+      spotlight_var1 >= kSpotlight_goal[spotlight_var2 >> 1]) {
+    // Widescreen: the opening circle stops at a size picked for 256x224, so
+    // the sides of a wider view only appeared when the scene ended. Keep it
+    // growing until it covers the whole picture. The circle is twice as wide
+    // as it is tall.
+    int extra = g_zenv.ppu->extraLeftRight;
+    int dx = IntMax((int16)spotlight_var3 + extra, 256 + extra - (int16)spotlight_var3) / 2 + 2;
+    int dy = IntMax((int16)r14, 224 - (int16)r14) + 2;
+    int needed = 0;
+    while (needed * needed < dx * dx + dy * dy)
+      needed++;
+    if (spotlight_var1 < needed && spotlight_var1 + kSpotlight_delta_size[spotlight_var2 >> 1] <= 250)
+      return;
+  } else if (spotlight_var1 != kSpotlight_goal[spotlight_var2 >> 1]) {
     return;
+  }
 
   if (!spotlight_var2) {
     INIDISP_copy = 0x80;
@@ -1505,6 +1534,7 @@ void IrisSpotlight_ConfigureTable() {  // 80f312
 void IrisSpotlight_ResetTable() {  // 80f427
   for (int i = 0; i < 240; i++)
     hdma_table_dynamic[i] = 0xff00;
+  memset(g_iris_wide, 0, sizeof(g_iris_wide));
 }
 
 uint16 IrisSpotlight_CalculateCircleValue(uint8 a) {  // 80f4cc
@@ -1515,6 +1545,8 @@ uint16 IrisSpotlight_CalculateCircleValue(uint8 a) {  // 80f4cc
     return 0xff;
   uint16 r2 = spotlight_var3 + p;
   uint16 r0 = spotlight_var3 - p;
+  g_iris_span_left = (int16)r0;
+  g_iris_span_right = (int16)r2;
   r0 = ((int16)r0 < 0) ? 0 :
          r0 < 255 ? r0 : 255;
   r2 = r2 < 255 ? r2 : 255;
