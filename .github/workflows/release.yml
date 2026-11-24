@@ -1,0 +1,110 @@
+name: Release
+
+# - push a mods (incluye merges de PR) -> compila Windows + Linux y publica un release rN
+# - tag v*                             -> lo mismo, usando ese tag como nombre del release
+# - pull_request                       -> solo compila (artefactos descargables, sin release)
+on:
+  push:
+    branches: [mods]
+    tags: ['v*']
+    paths-ignore: ['**.md', '.github/ISSUE_TEMPLATE/**']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  SDL2_VERSION: 2.26.5
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Bajar SDL2 (VC)
+        shell: pwsh
+        run: |
+          $zip = "SDL2-devel-$env:SDL2_VERSION-VC.zip"
+          Invoke-WebRequest "https://github.com/libsdl-org/SDL/releases/download/release-$env:SDL2_VERSION/$zip" -OutFile $zip
+          Expand-Archive $zip -DestinationPath third_party -Force
+      - name: Compilar
+        shell: cmd
+        run: build_msvc.bat bin\zelda3.exe
+      - name: Empaquetar
+        shell: pwsh
+        run: |
+          $d = "dist/zelda3"
+          New-Item -ItemType Directory -Force "$d/assets", "$d/saves" | Out-Null
+          Copy-Item bin/zelda3.exe, "third_party/SDL2-$env:SDL2_VERSION/lib/x64/SDL2.dll", zelda3.ini, extract_assets.bat, requirements.txt, README.md, MODS.md, LICENSE.txt $d
+          Copy-Item assets/*.py, assets/palette_usage.bin "$d/assets"
+          Compress-Archive "$d/*" dist/zelda3-windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zelda3-windows-x64
+          path: dist/zelda3-windows-x64.zip
+
+  linux:
+    runs-on: ubuntu-22.04   # glibc mas viejo = corre en mas distros
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencias
+        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev
+      - name: Compilar
+        run: make -j$(nproc) zelda3 CFLAGS=-O2
+      - name: Empaquetar
+        run: |
+          d=dist/zelda3
+          mkdir -p $d/assets $d/saves
+          cp zelda3 zelda3.ini requirements.txt README.md MODS.md LICENSE.txt $d/
+          cp assets/*.py assets/palette_usage.bin $d/assets/
+          tar -C dist -czf dist/zelda3-linux-x64.tar.gz zelda3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zelda3-linux-x64
+          path: dist/zelda3-linux-x64.tar.gz
+
+  release:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    needs: [windows, linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - name: Publicar release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            TAG="$GITHUB_REF_NAME"
+          else
+            TAG="r${GITHUB_RUN_NUMBER}"
+          fi
+          PREV=$(git tag --sort=-creatordate | grep -E '^(r[0-9]+|v.*)$' | grep -vx "$TAG" | head -n1 || true)
+          {
+            echo "Build automatico de \`${GITHUB_SHA::7}\`."
+            echo
+            echo "Necesitas tu propia ROM (US) para generar \`zelda3_assets.dat\`:"
+            echo "pone \`zelda3.sfc\` en la carpeta y corre \`extract_assets.bat\` (Windows) o"
+            echo "\`python3 assets/restool.py --extract-from-rom\` (Linux; requiere \`pip install -r requirements.txt\`)."
+            echo "En Linux ademas hace falta SDL2 (\`sudo apt install libsdl2-2.0-0\`)."
+            echo
+            echo "### Cambios"
+            if [ -n "$PREV" ]; then
+              git log --pretty='- %s (%h)' "$PREV..$GITHUB_SHA"
+            else
+              git log --pretty='- %s (%h)' -n 20 "$GITHUB_SHA"
+            fi
+          } > notes.md
+          gh release create "$TAG" out/* --target "$GITHUB_SHA" --title "zelda3 mods $TAG" --notes-file notes.md --latest

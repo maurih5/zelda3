@@ -8,7 +8,8 @@ if "%OUT%"=="" set OUT=bin\zelda3.exe
 set EXTRA=%~2
 set SDL2=third_party\SDL2-2.26.5
 
-call "C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\VC\Auxiliary\Build\vcvars64.bat" >nul || exit /b 1
+rem Si cl ya esta en el PATH (Developer Prompt / CI) no hace falta vcvars.
+where cl >nul 2>nul || call "C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\VC\Auxiliary\Build\vcvars64.bat" >nul || exit /b 1
 
 if not exist bin mkdir bin
 if not exist obj mkdir obj
