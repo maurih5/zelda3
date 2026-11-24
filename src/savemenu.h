@@ -23,6 +23,7 @@ enum {
 // Tabs of the in-game menu
 enum {
   kMenuTab_Saves,
+  kMenuTab_Save,
   kMenuTab_Options,
   kMenuTab_Controls,
   kMenuTab_Count,

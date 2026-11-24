@@ -955,6 +955,7 @@ int main(int argc, char** argv) {
         HandleCommand(kKeys_SaveMenu, true);
         SDL_LockMutex(g_audio_mutex);
         SaveMenu_Input(kSaveMenu_NextTab);
+        SaveMenu_Input(kSaveMenu_NextTab);
         SDL_UnlockMutex(g_audio_mutex);
         SelftestCheck(SaveMenu_GetTab() == kMenuTab_Options, "RB pasa a Opciones");
         SelftestDumpMenu("selftest_opt1.bmp");
@@ -1022,6 +1023,40 @@ int main(int argc, char** argv) {
           while (fgets(line, sizeof(line), of)) printf("  | %s", line);
           fclose(of);
         }
+      }
+      if (f == 2740) {
+        // "Guardar" tab: save to slot 8 from the menu, asking before overwriting.
+        FILE *pf = fopen("saves/save7.sav", "rb");
+        bool existed = pf != NULL;
+        if (pf) fclose(pf);
+        HandleCommand(kKeys_SaveMenu, true);
+        SDL_LockMutex(g_audio_mutex);
+        SaveMenu_Input(kSaveMenu_NextTab);
+        SDL_UnlockMutex(g_audio_mutex);
+        SelftestCheck(SaveMenu_GetTab() == kMenuTab_Save, "RB pasa a Guardar");
+        SDL_LockMutex(g_audio_mutex);
+        for (int i = 0; i < 7; i++) SaveMenu_Input(kSaveMenu_Down);
+        SaveMenu_Input(kSaveMenu_Ok);
+        SDL_UnlockMutex(g_audio_mutex);
+        if (existed) {
+          SelftestCheck(SaveMenu_IsOpen(), "ranura ocupada: pregunta antes de sobrescribir");
+          SelftestDumpMenu("selftest_save2.bmp");
+          SDL_LockMutex(g_audio_mutex);
+          SaveMenu_Input(kSaveMenu_Back);
+          SDL_UnlockMutex(g_audio_mutex);
+          SelftestCheck(SaveMenu_IsOpen() && SaveMenu_GetTab() == kMenuTab_Save, "B no sobrescribe");
+          SelftestDumpMenu("selftest_save1.bmp");
+          SDL_LockMutex(g_audio_mutex);
+          SaveMenu_Input(kSaveMenu_Ok);
+          SaveMenu_Input(kSaveMenu_Ok);
+          SDL_UnlockMutex(g_audio_mutex);
+        }
+        pf = fopen("saves/save7.sav", "rb");
+        SelftestCheck(pf != NULL && !SaveMenu_IsOpen(), "A guarda en la ranura 8 y cierra el menu");
+        if (pf) fclose(pf);
+        pf = fopen("saves/save7.thm", "rb");
+        SelftestCheck(pf != NULL, "con miniatura");
+        if (pf) fclose(pf);
       }
       if (f == 2750) {
         // Hold-to-save: releasing early cancels, holding saves after the delay.

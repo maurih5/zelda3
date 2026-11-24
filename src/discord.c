@@ -113,8 +113,8 @@ static void Describe(char *details, size_t dn, char *state, size_t sn) {
       snprintf(details, dn, "%s · bajo techo", dark ? "Mundo Oscuro" : "Mundo de la Luz");
     return;
   }
-  const char *place = OverworldPlace(overworld_screen_index);
-  const char *world = overworld_screen_index & 0x40 ? "Mundo Oscuro" : "Mundo de la Luz";
+  const char *place = OverworldPlace(overworld_area_index);
+  const char *world = overworld_area_index & 0x40 ? "Mundo Oscuro" : "Mundo de la Luz";
   if (place)
     snprintf(details, dn, "%s · %s", world, place);
   else

@@ -29,6 +29,8 @@ save (SRAM).
 Saving to a manual slot (Shift+F1..F10, View+RB) needs the key held for a
 moment (1 s by default, with a progress bar), so a slot is not overwritten by
 an accidental press; releasing early cancels. `SaveHoldMs = 0` saves at once.
+The menu's "Guardar" tab also saves to any of the 10 manual slots, showing
+what each one holds and asking before overwriting.
 
 ```ini
 [General]

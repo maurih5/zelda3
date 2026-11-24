@@ -62,6 +62,10 @@ static struct {
   int tab;
   MenuEntry ents[kMaxEntries];
   int num_ents, sel, scroll;
+  // "Guardar" tab: the manual slots, empty ones with hdr.time == 0.
+  MenuEntry slots[kNumManualSlots];
+  int slot_sel, slot_scroll;
+  int confirm;  // slot waiting for "overwrite?" confirmation, -1 = none
   uint32 last_gamepad;
 } g_sm = { .last_area_key = -1 };
 
@@ -420,12 +424,11 @@ static void FreeEntries() {
   g_sm.num_ents = 0;
 }
 
-static void AddEntry(const char *sav, int slot) {
+static bool FillEntry(MenuEntry *e, const char *sav, int slot) {
   int64 mtime;
-  if (!FileExists(sav, &mtime) || g_sm.num_ents >= kMaxEntries)
-    return;
-  MenuEntry *e = &g_sm.ents[g_sm.num_ents++];
   memset(e, 0, sizeof(*e));
+  if (!FileExists(sav, &mtime))
+    return false;
   snprintf(e->sav, sizeof(e->sav), "%s", sav);
   e->slot = slot;
   e->has_hdr = ReadThumbHeader(sav, &e->hdr, &e->thumb);
@@ -438,6 +441,31 @@ static void AddEntry(const char *sav, int slot) {
     e->hdr.time = mtime;
   if (strncmp(sav, "saves/save", 10) == 0)
     e->hdr.kind = kKind_Manual;
+  return true;
+}
+
+static void AddEntry(const char *sav, int slot) {
+  if (g_sm.num_ents < kMaxEntries && FillEntry(&g_sm.ents[g_sm.num_ents], sav, slot))
+    g_sm.num_ents++;
+}
+
+static void FreeSlots() {
+  for (int i = 0; i < kNumManualSlots; i++) {
+    free(g_sm.slots[i].thumb);
+    g_sm.slots[i].thumb = NULL;
+  }
+}
+
+static void ScanSlots() {
+  FreeSlots();
+  for (int i = 0; i < kNumManualSlots; i++) {
+    char p[64];
+    snprintf(p, sizeof(p), "saves/save%d.sav", i);
+    if (!FillEntry(&g_sm.slots[i], p, i)) {
+      g_sm.slots[i].slot = i;
+      g_sm.slots[i].hdr.kind = kKind_Manual;
+    }
+  }
 }
 
 static int CompareEntries(const void *a, const void *b) {
@@ -461,13 +489,16 @@ static void ScanEntries() {
 
 void SaveMenu_Toggle() {
   g_sm.open = !g_sm.open;
+  g_sm.confirm = -1;
   if (g_sm.open) {
     ScanEntries();
+    ScanSlots();
     g_sm.sel = g_sm.scroll = 0;
     g_sm.tab = kMenuTab_Saves;
     OptMenu_Open();
   } else {
     FreeEntries();
+    FreeSlots();
   }
 }
 
@@ -540,6 +571,47 @@ static void LoadSelected() {
   }
   g_sm.open = false;
   FreeEntries();
+  FreeSlots();
+}
+
+// Saves the running game to a manual slot (same files as Shift+F1..F10).
+static void SaveToSlot(int slot) {
+  MakeDir("saves");
+  SaveLoadSlot(kSaveLoad_Save, slot);
+  SaveMenu_OnManualSave(slot);
+  char msg[64];
+  snprintf(msg, sizeof(msg), "Guardado en ranura %d", slot + 1);
+  ShowToast(msg);
+  g_sm.open = false;
+  g_sm.confirm = -1;
+  FreeEntries();
+  FreeSlots();
+}
+
+static void SaveTabInput(int action) {
+  if (g_sm.confirm >= 0) {
+    if (action == kSaveMenu_Ok)
+      SaveToSlot(g_sm.confirm);
+    else if (action == kSaveMenu_Back)
+      g_sm.confirm = -1;
+    return;
+  }
+  int n = kNumManualSlots;
+  switch (action) {
+  case kSaveMenu_Up: g_sm.slot_sel = (g_sm.slot_sel + n - 1) % n; break;
+  case kSaveMenu_Down: g_sm.slot_sel = (g_sm.slot_sel + 1) % n; break;
+  case kSaveMenu_Left:
+  case kSaveMenu_PageUp: g_sm.slot_sel = g_sm.slot_sel > 4 ? g_sm.slot_sel - 4 : 0; break;
+  case kSaveMenu_Right:
+  case kSaveMenu_PageDown: g_sm.slot_sel = g_sm.slot_sel + 4 < n ? g_sm.slot_sel + 4 : n - 1; break;
+  case kSaveMenu_Ok:
+    if (g_sm.slots[g_sm.slot_sel].hdr.time != 0)
+      g_sm.confirm = g_sm.slot_sel;  // ask before overwriting
+    else
+      SaveToSlot(g_sm.slot_sel);
+    break;
+  case kSaveMenu_Back: SaveMenu_Toggle(); break;
+  }
 }
 
 void SaveMenu_Input(int action) {
@@ -550,7 +622,12 @@ void SaveMenu_Input(int action) {
   if (action == kSaveMenu_PrevTab || action == kSaveMenu_NextTab) {
     int d = action == kSaveMenu_NextTab ? 1 : kMenuTab_Count - 1;
     g_sm.tab = (g_sm.tab + d) % kMenuTab_Count;
+    g_sm.confirm = -1;
     OptMenu_Open();
+    return;
+  }
+  if (g_sm.tab == kMenuTab_Save) {
+    SaveTabInput(action);
     return;
   }
   if (g_sm.tab != kMenuTab_Saves) {
@@ -571,6 +648,88 @@ void SaveMenu_Input(int action) {
   }
 }
 
+// The list of saves (left) with a preview of the selected one (right).
+// |slots_mode|: the "Guardar" tab, where entries can be empty slots.
+static void DrawEntries(Canvas *c, MenuEntry *ents, int n, int *sel, int *scroll, bool slots_mode) {
+  int width = c->w, height = c->h;
+  char buf[96];
+  // Layout: list on the left, preview on the right.
+  int preview_w = (width - 34) / 2;
+  int list_x = 10, list_w = width - 34 - preview_w;
+  int prev_x = width - 10 - preview_w;
+  int top = 30;
+  int rows = VisibleRows(height);
+  if (*sel < *scroll) *scroll = *sel;
+  if (*sel >= *scroll + rows) *scroll = *sel - rows + 1;
+
+  for (int r = 0; r < rows && *scroll + r < n; r++) {
+    int i = *scroll + r;
+    MenuEntry *e = &ents[i];
+    int y = top + r * 30;
+    if (i == *sel) {
+      FillRect(c, list_x, y, list_w, 28, kCol_Select, 220);
+      DrawFrame(c, list_x, y, list_w, 28, kCol_Gold);
+    } else {
+      FillRect(c, list_x, y, list_w, 28, kCol_Panel, 150);
+    }
+    char label[48], rel[48];
+    bool empty = e->hdr.time == 0;
+    EntryLabel(e, label, sizeof(label));
+    if (empty)
+      snprintf(rel, sizeof(rel), "Vacía");
+    else
+      RelativeTime(e->hdr.time, rel, sizeof(rel));
+    int rel_w = MeasureText(rel);
+    DrawText(c, list_x + list_w - 5 - rel_w, y + 1, rel, kCol_Gray, -1);
+    DrawText(c, list_x + 5, y + 1, label, i == *sel ? kCol_Gold : kCol_White, list_w - 16 - rel_w);
+    if (empty)
+      snprintf(buf, sizeof(buf), "%s", "Ranura libre");
+    else if (e->hdr.loc[0])
+      snprintf(buf, sizeof(buf), "%s", e->hdr.loc);
+    else
+      AbsoluteTime(e->hdr.time, buf, sizeof(buf));
+    DrawText(c, list_x + 5, y + 14, buf, kCol_Gray, list_w - 10);
+  }
+  // Scroll indicators
+  if (*scroll > 0)
+    for (int k = 0; k < 4; k++) FillRect(c, list_x + list_w / 2 - k, 26 + k, 2 * k + 1, 1, kCol_Gold, 256);
+  if (*scroll + rows < n) {
+    int yb = top + rows * 30 - 1;
+    for (int k = 0; k < 4; k++) FillRect(c, list_x + list_w / 2 - k, yb + 3 - k, 2 * k + 1, 1, kCol_Gold, 256);
+  }
+
+  // Preview of the selected entry
+  MenuEntry *e = &ents[*sel];
+  int aspect_w = e->thumb ? (int)e->hdr.w : width, aspect_h = e->thumb ? (int)e->hdr.h : height;
+  int preview_h = preview_w * aspect_h / aspect_w;
+  if (preview_h > height / 2) preview_h = height / 2;
+  FillRect(c, prev_x - 2, top - 2, preview_w + 4, preview_h + 4, kCol_Black, 256);
+  if (e->thumb) {
+    DrawImage(c, prev_x, top, preview_w, preview_h, e->thumb, e->hdr.w, e->hdr.h);
+  } else {
+    FillRect(c, prev_x, top, preview_w, preview_h, kCol_Panel, 256);
+    const char *msg = e->hdr.time == 0 ? "Ranura vacía" : "Sin imagen";
+    DrawText(c, prev_x + (preview_w - MeasureText(msg)) / 2, top + preview_h / 2 - 7, msg, kCol_Gray, -1);
+  }
+  DrawFrame(c, prev_x - 2, top - 2, preview_w + 4, preview_h + 4, kCol_Gold);
+
+  int y = top + preview_h + 6;
+  if (e->hdr.time == 0) {
+    if (slots_mode)
+      DrawText(c, prev_x, y, "Guardá acá la partida actual", kCol_Gray, preview_w);
+    return;
+  }
+  AbsoluteTime(e->hdr.time, buf, sizeof(buf));
+  DrawText(c, prev_x, y, buf, kCol_White, preview_w);
+  y += 14;
+  if (e->hdr.loc[0]) {
+    DrawText(c, prev_x, y, e->hdr.loc, kCol_Gold, preview_w);
+    y += 15;
+  }
+  if (e->hdr.max_hearts && y + 8 < height - 22)
+    DrawHearts(c, prev_x, y + 1, e->hdr.hearts, e->hdr.max_hearts, preview_w);
+}
+
 void SaveMenu_Draw(uint8 *pixels, int pitch, int width, int height) {
   Canvas c = { pixels, pitch, 1, width, height };
 
@@ -587,7 +746,7 @@ void SaveMenu_Draw(uint8 *pixels, int pitch, int width, int height) {
   }
 
   // Tabs
-  static const char *const kTabNames[kMenuTab_Count] = { "Guardados", "Opciones", "Controles" };
+  static const char *const kTabNames[kMenuTab_Count] = { "Cargar", "Guardar", "Opciones", "Controles" };
   int tx = 12;
   bool wide = width >= 360;
   bool tab_glyphs = wide && !g_kbd_hints;
@@ -615,10 +774,25 @@ void SaveMenu_Draw(uint8 *pixels, int pitch, int width, int height) {
 
   // Footer
   FillRect(&c, 10, height - 20, width - 20, 1, kCol_DarkGold, 256);
-  const char *hint = g_sm.tab != kMenuTab_Saves ?
-      OptMenu_Hint(g_sm.tab == kMenuTab_Options ? kOptPage_Options : kOptPage_Controls, wide) :
-      "LR:Pestaña|B:Volver|A:Cargar";
+  const char *hint = g_sm.tab == kMenuTab_Saves ? "LR:Pestaña|B:Volver|A:Cargar" :
+      g_sm.tab == kMenuTab_Save ? (g_sm.confirm >= 0 ? "B:No|A:Sí" : "LR:Pestaña|B:Volver|A:Guardar") :
+      OptMenu_Hint(g_sm.tab == kMenuTab_Options ? kOptPage_Options : kOptPage_Controls, wide);
   DrawHintBar(&c, 12, width - 12, height - 16, hint, g_kbd_hints);
+
+  if (g_sm.tab == kMenuTab_Save) {
+    DrawEntries(&c, g_sm.slots, kNumManualSlots, &g_sm.slot_sel, &g_sm.slot_scroll, true);
+    if (g_sm.confirm >= 0) {
+      snprintf(buf, sizeof(buf), "¿Sobrescribir la ranura %d?", g_sm.confirm + 1);
+      int bw = MeasureText(buf) + 32, bh = 44;
+      if (bw < 160) bw = 160;
+      int bx = (width - bw) / 2, by = (height - bh) / 2;
+      FillRect(&c, bx, by, bw, bh, kCol_Panel, 245);
+      DrawFrame(&c, bx, by, bw, bh, kCol_Gold);
+      DrawText(&c, bx + (bw - MeasureText(buf)) / 2, by + 6, buf, kCol_White, -1);
+      DrawHintBar(&c, bx + 8, bx + bw - 10, by + bh - 18, "B:No|A:Sí", g_kbd_hints);
+    }
+    return;
+  }
 
   if (g_sm.tab != kMenuTab_Saves) {
     OptMenu_Draw(g_sm.tab == kMenuTab_Options ? kOptPage_Options : kOptPage_Controls, &c, 30, height - 22);
@@ -635,68 +809,5 @@ void SaveMenu_Draw(uint8 *pixels, int pitch, int width, int height) {
     return;
   }
 
-  // Layout: list on the left, preview on the right.
-  int preview_w = (width - 34) / 2;
-  int list_x = 10, list_w = width - 34 - preview_w;
-  int prev_x = width - 10 - preview_w;
-  int top = 30;
-  int rows = VisibleRows(height);
-  if (g_sm.sel < g_sm.scroll) g_sm.scroll = g_sm.sel;
-  if (g_sm.sel >= g_sm.scroll + rows) g_sm.scroll = g_sm.sel - rows + 1;
-
-  for (int r = 0; r < rows && g_sm.scroll + r < g_sm.num_ents; r++) {
-    int i = g_sm.scroll + r;
-    MenuEntry *e = &g_sm.ents[i];
-    int y = top + r * 30;
-    if (i == g_sm.sel) {
-      FillRect(&c, list_x, y, list_w, 28, kCol_Select, 220);
-      DrawFrame(&c, list_x, y, list_w, 28, kCol_Gold);
-    } else {
-      FillRect(&c, list_x, y, list_w, 28, kCol_Panel, 150);
-    }
-    char label[48], rel[48];
-    EntryLabel(e, label, sizeof(label));
-    RelativeTime(e->hdr.time, rel, sizeof(rel));
-    int rel_w = MeasureText(rel);
-    DrawText(&c, list_x + list_w - 5 - rel_w, y + 1, rel, kCol_Gray, -1);
-    DrawText(&c, list_x + 5, y + 1, label, i == g_sm.sel ? kCol_Gold : kCol_White, list_w - 16 - rel_w);
-    if (e->hdr.loc[0])
-      snprintf(buf, sizeof(buf), "%s", e->hdr.loc);
-    else
-      AbsoluteTime(e->hdr.time, buf, sizeof(buf));
-    DrawText(&c, list_x + 5, y + 14, buf, kCol_Gray, list_w - 10);
-  }
-  // Scroll indicators
-  if (g_sm.scroll > 0)
-    for (int k = 0; k < 4; k++) FillRect(&c, list_x + list_w / 2 - k, 26 + k, 2 * k + 1, 1, kCol_Gold, 256);
-  if (g_sm.scroll + rows < g_sm.num_ents) {
-    int yb = top + rows * 30 - 1;
-    for (int k = 0; k < 4; k++) FillRect(&c, list_x + list_w / 2 - k, yb + 3 - k, 2 * k + 1, 1, kCol_Gold, 256);
-  }
-
-  // Preview of the selected entry
-  MenuEntry *e = &g_sm.ents[g_sm.sel];
-  int aspect_w = e->thumb ? (int)e->hdr.w : width, aspect_h = e->thumb ? (int)e->hdr.h : height;
-  int preview_h = preview_w * aspect_h / aspect_w;
-  if (preview_h > height / 2) preview_h = height / 2;
-  FillRect(&c, prev_x - 2, top - 2, preview_w + 4, preview_h + 4, kCol_Black, 256);
-  if (e->thumb) {
-    DrawImage(&c, prev_x, top, preview_w, preview_h, e->thumb, e->hdr.w, e->hdr.h);
-  } else {
-    FillRect(&c, prev_x, top, preview_w, preview_h, kCol_Panel, 256);
-    const char *msg = "Sin imagen";
-    DrawText(&c, prev_x + (preview_w - MeasureText(msg)) / 2, top + preview_h / 2 - 7, msg, kCol_Gray, -1);
-  }
-  DrawFrame(&c, prev_x - 2, top - 2, preview_w + 4, preview_h + 4, kCol_Gold);
-
-  int y = top + preview_h + 6;
-  AbsoluteTime(e->hdr.time, buf, sizeof(buf));
-  DrawText(&c, prev_x, y, buf, kCol_White, preview_w);
-  y += 14;
-  if (e->hdr.loc[0]) {
-    DrawText(&c, prev_x, y, e->hdr.loc, kCol_Gold, preview_w);
-    y += 15;
-  }
-  if (e->hdr.max_hearts && y + 8 < height - 22)
-    DrawHearts(&c, prev_x, y + 1, e->hdr.hearts, e->hdr.max_hearts, preview_w);
+  DrawEntries(&c, g_sm.ents, g_sm.num_ents, &g_sm.sel, &g_sm.scroll, false);
 }
