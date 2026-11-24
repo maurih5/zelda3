@@ -40,8 +40,8 @@ static const uint16 kDefaultKbdControls[kKeys_Total] = {
   N, N, N, N,
   // ClearKeyLog, StopReplay, Fullscreen, Reset, Pause, PauseDimmed, Turbo, ReplayTurbo, WindowBigger, WindowSmaller, DisplayPerf, ToggleRenderer
   _(SDLK_k), _(SDLK_l), A(SDLK_RETURN), C(SDLK_r), S(SDLK_p), _(SDLK_p), _(SDLK_TAB), _(SDLK_t), N, N, _(SDLK_f), _(SDLK_r),
-  // VolumeUp, VolumeDown, Rewind, SaveMenu, Quit
-  N, N, _(SDLK_BACKSPACE), _(SDLK_ESCAPE), N,
+  // VolumeUp, VolumeDown, Rewind, SaveMenu, Quit, Screenshot
+  N, N, _(SDLK_BACKSPACE), _(SDLK_ESCAPE), N, _(SDLK_F12),
 };
 #undef _
 #undef A
@@ -62,7 +62,7 @@ static const KeyNameId kKeyNameId[] = {
   S(CheatLife), S(CheatKeys), S(CheatEquipment), S(CheatWalkThroughWalls),
   S(ClearKeyLog), S(StopReplay), S(Fullscreen), S(Reset),
   S(Pause), S(PauseDimmed), S(Turbo), S(ReplayTurbo), S(WindowBigger), S(WindowSmaller), S(VolumeUp), S(VolumeDown), S(DisplayPerf), S(ToggleRenderer),
-  S(Rewind), S(SaveMenu), S(Quit),
+  S(Rewind), S(SaveMenu), S(Quit), S(Screenshot),
 };
 #undef S
 #undef M
@@ -541,6 +541,8 @@ static bool HandleIniConfig(int section, const char *key, char *value) {
     } else if (StringEqualsNoCase(key, "DiscordAppId")) {
       g_config.discord_app_id = value;
       return true;
+    } else if (StringEqualsNoCase(key, "AchievementToasts")) {
+      return ParseBool(value, &g_config.achievement_toasts);
     } else if (StringEqualsNoCase(key, "DialogSpeed")) {
       g_config.dialog_speed = IntMin(IntMax(atoi(value), 0), 4);
       return true;
@@ -726,6 +728,7 @@ void ParseConfigFile(const char *filename) {
   g_config.save_hold_ms = 1000;
   g_config.transition_speed = 2;
   g_config.dialog_speed = 1;
+  g_config.achievement_toasts = true;
   g_config.discord = true;
   g_config.nintendo_menu_buttons = true;
   g_config.discord_location = true;

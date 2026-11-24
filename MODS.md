@@ -105,6 +105,33 @@ OGG and FLAC files or the `smpl` chunk of WAV files; without one, looping
 tracks start over. Resuming the music position works as with PCM. A PCM pack
 converted to OGG is about a tenth of the size.
 
+## Play time, statistics and achievements
+The play time of each save file (counted only while playing, not in menus or
+pauses), hits taken and enemies defeated are kept in `saves/estadisticas.ini`,
+separate from the game's own save; starting a new game in a slot, copying or
+erasing a file updates it. The menu's "Progreso" tab shows them with the
+deaths, hearts, pendants, crystals, items, bottles and rupees of the file
+being played, plus 17 achievements read from the save itself (so they follow
+states and in-game saves). Getting an item, a heart, a pendant, a crystal or
+an achievement shows a notice (can be turned off). Save states remember the
+play time they were made at, shown in the Load tab, and Discord shows it too.
+
+```ini
+[General]
+AchievementToasts = 1
+```
+
+## Screenshots
+**F12** (bindable, also to a gamepad combo, in Controls) saves the game picture
+without the menus or notices as `capturas/zelda3_<date>_<time>.png`, at 4x the
+SNES resolution.
+
+## MSU options in the menu
+Options → Sound turns MSU music on and off and picks the pack among the
+`<prefix><track>.<ext>` files found in the `msu*` folders and their
+subfolders, switching the song that is playing right away, and toggles
+ResumeMSU.
+
 ## Display mode and menu buttons
 The options menu chooses window / borderless window / fullscreen and the
 window size (x1-x6); both are remembered. Menus use the Nintendo button

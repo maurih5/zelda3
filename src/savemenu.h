@@ -27,6 +27,7 @@ enum {
   kMenuTab_Options,
   kMenuTab_Controls,
   kMenuTab_Cheats,
+  kMenuTab_Stats,
   kMenuTab_Count,
 };
 
@@ -42,6 +43,7 @@ void SaveMenu_OnFramePlayed();
 void SaveMenu_OnManualSave(int slot);
 void SaveMenu_OnQuit();
 void SaveMenu_ShowToast(const char *msg);
+bool SaveMenu_ToastActive();
 // Button prompts show keyboard keys (true) or gamepad buttons (false).
 void SaveMenu_SetKeyboardHints(bool keyboard);
 // Shows a message with a progress bar (permille 0..1000); NULL hides it.

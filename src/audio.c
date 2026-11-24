@@ -608,6 +608,21 @@ void ZeldaEnableMsu(uint8 enable) {
   }
 }
 
+void ZeldaRestartMusic(uint8 enable_msu) {
+  ZeldaApuLock();
+  MsuPlayer *mp = &g_msu_player;
+  uint8 track = (music_unk1 == 0xf1 && mp->state != kMsuState_Idle) ? mp->resume_info.orig_track : music_unk1;
+  MsuPlayer_CloseFile(mp);
+  mp->state = kMsuState_Idle;
+  ZeldaEnableMsu(enable_msu);
+  if (enable_msu && track != 0 && track < 0xf0)
+    MsuPlayer_Open(mp, track, false);
+  // Pause the original music while the MSU track plays, or restart it.
+  if (track != 0 && track < 0xf0)
+    zelda_apu_write(APUI00, mp->state != kMsuState_Idle ? 0xf0 : track);
+  ZeldaApuUnlock();
+}
+
 void LoadSongBank(const uint8 *p) {  // 808888
   ZeldaApuLock();
   SpcPlayer_Upload(g_zenv.player, p);

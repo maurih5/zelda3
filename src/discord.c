@@ -13,6 +13,7 @@
 #include "discord.h"
 #include "zelda_rtl.h"
 #include "variables.h"
+#include "stats.h"
 
 
 enum {
@@ -89,12 +90,19 @@ static void Describe(char *details, size_t dn, char *state, size_t sn) {
     return;
   }
 
+  char played[48] = "";
+  int file = Stats_CurrentFile();
+  if (file >= 0) {
+    char t[32];
+    Stats_FormatTime(Stats_PlaySeconds(file), t, sizeof(t));
+    snprintf(played, sizeof(played), " · %s jugados", t);
+  }
   int hearts = link_health_capacity / 8, cur = (link_health_current + 7) / 8;
   int pendants = CountBits(link_which_pendants & 7), crystals = CountBits(link_has_crystals & 0x7f);
   if (crystals || pendants == 3)
-    snprintf(state, sn, "%d/%d corazones · %d/7 cristales", cur, hearts, crystals);
+    snprintf(state, sn, "%d/%d corazones · %d/7 cristales%s", cur, hearts, crystals, played);
   else
-    snprintf(state, sn, "%d/%d corazones · %d/3 colgantes", cur, hearts, pendants);
+    snprintf(state, sn, "%d/%d corazones · %d/3 colgantes%s", cur, hearts, pendants, played);
 
   if (!g_show_location) {
     snprintf(details, dn, "Jugando");

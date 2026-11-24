@@ -6,6 +6,7 @@
 #include "overworld.h"
 #include "messaging.h"
 #include "sprite.h"
+#include "stats.h"
 
 #define selectfile_R16 g_ram[0xc8]
 #define selectfile_R17 g_ram[0xc9]
@@ -603,6 +604,7 @@ void CopyFile_HandleConfirmation() {  // 8cd371
     sound_effect_1 = 0x2c;
     if (selectfile_R16 == 0) {
       memcpy(g_zenv.sram + (selectfile_R18 >> 1) * 0x500, g_zenv.sram + (selectfile_R20 >> 1) * 0x500, 0x500);
+      Stats_OnFileCopied(selectfile_R20 >> 1, selectfile_R18 >> 1);
       selectfile_arr1[(selectfile_R18 >> 1)] = 1;
       ZeldaWriteSram();
     }
@@ -748,6 +750,7 @@ void NameFile_EraseSave() {  // 8cd89c
   int offs = selectfile_R16 * 0x500;
   attract_legend_ctr = offs;
   memset(g_zenv.sram + offs, 0, 0x500);
+  Stats_OnFileErased(selectfile_R16);
   uint16 *name = (uint16 *)(g_zenv.sram + offs + kSrmOffs_Name);
   name[0] = name[1] = name[2] = name[3] = name[4] = name[5] = 0xa9;
 }
@@ -854,6 +857,7 @@ void NameFile_DoTheNaming() {  // 8cda4d
     }
   }
   srm_var1 = selectfile_R16 * 2 + 2;
+  Stats_OnFileCreated(selectfile_R16);  // a new game in this slot
   uint8 *sram = &g_zenv.sram[selectfile_R16 * 0x500];
   WORD(sram[0x3e5]) = 0x55aa;
   WORD(sram[0x20c]) = 0xf000;

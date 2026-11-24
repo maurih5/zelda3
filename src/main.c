@@ -32,6 +32,8 @@
 #include "haptics.h"
 #include "messaging.h"
 #include "misc.h"
+#include "stats.h"
+#include "screenshot.h"
 #include "edgefx.h"
 
 static bool g_run_without_emu = 0;
@@ -253,6 +255,22 @@ static SDL_HitTestResult HitTestCallback(SDL_Window *win, const SDL_Point *pt, v
   return SDL_HITTEST_NORMAL;
 }
 
+static bool g_screenshot_pending;
+
+// Saves the game picture (without the menus and notices drawn on top).
+static void TakeScreenshot(const uint8 *pixels, int pitch, int render_scale) {
+  char path[128];
+  // 4x the SNES resolution, or the enhanced Mode 7 picture as it is.
+  int factor = render_scale >= 4 ? 1 : 4 / render_scale;
+  if (Screenshot_Write(pixels, pitch, g_snes_width * render_scale, g_snes_height * render_scale, factor, path, sizeof(path))) {
+    char msg[160];
+    snprintf(msg, sizeof(msg), "Captura guardada: %s", path);
+    SaveMenu_ShowToast(msg);
+  } else {
+    SaveMenu_ShowToast("No se pudo guardar la captura");
+  }
+}
+
 static void DrawPpuFrameWithPerf() {
   int render_scale = PpuGetCurrentRenderScale(g_zenv.ppu, g_ppu_render_flags);
   uint8 *pixel_buffer = 0;
@@ -320,6 +338,10 @@ static void DrawPpuFrameWithPerf() {
   if (render_scale == 1)
     PpuRedrawHudOverlay(g_zenv.ppu, pixel_buffer, pitch);
   SaveMenu_CaptureFrame(pixel_buffer, pitch, render_scale, g_snes_width, g_snes_height);
+  if (g_screenshot_pending) {
+    g_screenshot_pending = false;
+    TakeScreenshot(pixel_buffer, pitch, render_scale);
+  }
   SaveMenu_DrawOverlay(pixel_buffer, pitch, render_scale, g_snes_width, g_snes_height);
   if (g_display_perf)
     RenderNumber(pixel_buffer + pitch * render_scale, pitch, g_curr_fps, render_scale == 4);
@@ -471,6 +493,7 @@ int main(int argc, char** argv) {
   Haptics_Configure(g_config.rumble_intensity);
   Discord_Configure(g_config.discord, g_config.discord_location);
   Discord_Init(g_config.discord_app_id);
+  Stats_Init();
   g_wide_hud = g_config.wide_hud;
 
   if (g_config.window_borderless)
@@ -772,7 +795,7 @@ int main(int argc, char** argv) {
           g_config.disable_frame_delay = !getenv("ZELDA3_SELFTEST_REALTIME");
         inputs = 0;
         for (char *tok = strtok(spec, ";"); tok; tok = strtok(NULL, ";")) {
-          int a = -1, b = -1;
+          int a = -1, b = -1, c = -1;
           char name[64];
           if (f == 0 && strcmp(tok, "load") == 0) {
             HandleCommand(kKeys_Load + 0, true);
@@ -810,6 +833,10 @@ int main(int argc, char** argv) {
             static const char *const kActs[] = { "Up", "Down", "PageUp", "PageDown", "Ok", "Back", "Left", "Right" };
             for (int i = 0; i < 8; i++)
               if (strcmp(name, kActs[i]) == 0) SaveMenu_Input(kSaveMenu_Up + i);
+          } else if (sscanf(tok, "give:%x=%x@%d", &b, &c, &a) == 3 && f == a) {
+            g_ram[b] = c;  // e.g. give:f37a=1 (a crystal)
+          } else if (sscanf(tok, "shot@%d", &a) == 1 && f == a) {
+            g_screenshot_pending = true;
           } else if (sscanf(tok, "hurt:%d@%d", &b, &a) == 2 && f == a) {
             link_give_damage = b;
           } else if (sscanf(tok, "cheat:%40[^@]@%d", name, &a) == 2 && f == a) {
@@ -830,6 +857,8 @@ int main(int argc, char** argv) {
             printf("SCRIPT boots rumble: charge=%d launch=%d step=%d bonk=%d\n", g_st_haptic_boots[0],
                    g_st_haptic_boots[1], g_st_haptic_boots[2], g_st_haptic_boots[3]);
             printf("SCRIPT transitions: %d frames, %d shown\n", g_st_trans_frames, g_st_trans_shown);
+            printf("SCRIPT playtime: file %d, %u s\n", Stats_CurrentFile(), Stats_PlaySeconds(Stats_CurrentFile()));
+            Stats_Shutdown();
             printf("SCRIPT end at %d (module %d)\n", f, main_module_index);
             fflush(stdout);
             exit(0);
@@ -1028,7 +1057,7 @@ int main(int argc, char** argv) {
         printf("Volumen %d -> %d\n", vol0, g_config.volume);
         SelftestCheck(g_config.volume == vol0 - 20, "izquierda baja el volumen");
         SDL_LockMutex(g_audio_mutex);
-        for (int i = 0; i < 27; i++) SaveMenu_Input(kSaveMenu_Down);
+        for (int i = 0; i < 30; i++) SaveMenu_Input(kSaveMenu_Down);
         uint32 feat0 = g_config.features0;
         SaveMenu_Input(kSaveMenu_Ok);
         SDL_UnlockMutex(g_audio_mutex);
@@ -1036,7 +1065,7 @@ int main(int argc, char** argv) {
                       (g_wanted_zelda_features & kFeatures0_TurnWhileDashing), "A activa 'Girar al correr'");
         SelftestDumpMenu("selftest_opt2.bmp");
         SDL_LockMutex(g_audio_mutex);
-        for (int i = 0; i < 24; i++) SaveMenu_Input(kSaveMenu_Up);
+        for (int i = 0; i < 27; i++) SaveMenu_Input(kSaveMenu_Up);
         SaveMenu_Input(kSaveMenu_Ok);  // Shader (needs OpenGL)
         SDL_UnlockMutex(g_audio_mutex);
         SelftestDumpMenu("selftest_opt3.bmp");
@@ -1166,6 +1195,8 @@ SELFTEST_SCRIPT_DONE:;
 #endif
     if (g_rewind_held)
       rewound = ZeldaRewindStep();
+    if (rewound)
+      Stats_Resync();
 #ifdef REWIND_SELFTEST
     if (rewound) {
       double d = StNow() - st_t0;
@@ -1186,6 +1217,7 @@ SELFTEST_SCRIPT_DONE:;
       ZeldaRewindCapture();
       SaveMenu_OnFramePlayed();
       Discord_Update();
+      Stats_OnFrame();
 #ifdef REWIND_SELFTEST
       double d = StNow() - st_t1;
       if (d > 0.00005) {  // only count real captures
@@ -1251,6 +1283,7 @@ SELFTEST_SCRIPT_DONE:;
     HandleCommand(kKeys_Save + 0, true);
 
   Discord_Shutdown();
+  Stats_Shutdown();
 
   // clean sdl
   if (g_config.enable_audio) {
@@ -1413,6 +1446,7 @@ static void HandleCommand_Locked(uint32 j, bool pressed) {
     case kKeys_ToggleRenderer: g_ppu_render_flags ^= kPpuRenderFlags_NewRenderer; break;
     case kKeys_VolumeUp:
     case kKeys_VolumeDown: HandleVolumeAdjustment(j == kKeys_VolumeUp ? 1 : -1); break;
+    case kKeys_Screenshot: g_screenshot_pending = true; break;
     case kKeys_Quit: {
       // Same as closing the window (autosaves on the way out).
       SDL_Event ev = { .type = SDL_QUIT };

@@ -14,6 +14,7 @@
 #include "audio.h"
 #include "assets.h"
 #include "features.h"
+#include "stats.h"
 ZeldaEnv g_zenv;
 uint8 g_ram[131072];
 
@@ -430,6 +431,7 @@ static void InternalSaveLoad(SaveLoadFunc *func, void *ctx) {
 }
 
 void ZeldaReset(bool preserve_sram) {
+  Stats_Resync();
   frame_ctr_dbg = 0;
   ZeldaRewindClear();
   dma_reset(g_zenv.dma);
@@ -536,6 +538,7 @@ void ReadFromFile(FILE *f, void *data, size_t n) {
 }
 
 void StateRecorder_Load(StateRecorder *sr, FILE *f, bool replay_mode) {
+  Stats_Resync();
   // todo: fix robustness on invalid data.
   uint32 hdr[8] = { 0 };
   ReadFromFile(f, hdr, sizeof(hdr));

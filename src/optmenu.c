@@ -70,6 +70,10 @@ enum {
   kO_CheatMagic,
   kO_CheatInfAmmo,
   kO_CheatWalls,
+  kO_Msu,
+  kO_MsuPack,
+  kO_ResumeMsu,
+  kO_AchToasts,
   kO_Feature,  // + index in kFeatureDefs
 };
 
@@ -107,6 +111,9 @@ static const OptDef kOptions[] = {
   { kT_Slider, kO_Volume, "Volumen general", "Volumen de todo el juego. También se cambia con las teclas de volumen." },
   { kT_Slider, kO_Music, "Música (MSU)", "Volumen de la música MSU. Sin MSU, la música del juego sale junto con los efectos." },
   { kT_Slider, kO_Sfx, "Efectos", "Volumen de los efectos de sonido (y de la música original si no hay MSU)." },
+  { kT_Toggle, kO_Msu, "Música MSU", "Usa la música de alta calidad del pack MSU en vez de la del juego original." },
+  { kT_Choice, kO_MsuPack, "Pack de música", "Elegí entre los packs MSU de las carpetas msu (en PCM, OGG, FLAC, MP3 o WAV)." },
+  { kT_Toggle, kO_ResumeMsu, "Retomar la música", "Al volver al mapa, la música sigue desde donde estaba en vez de empezar de nuevo." },
   { kT_Header, 0, "Imagen", NULL },
   { kT_Shader, kO_Shader, "Shader", "A: elegir un shader de la carpeta glsl-shaders. Se aplica en el momento." },
   { kT_Choice, kO_Aspect, "Formato de pantalla", "Ancho de la imagen. Se aplica al reiniciar el juego." },
@@ -151,6 +158,8 @@ static const OptDef kOptions[] = {
   { kT_Header, 0, "Diálogos", NULL },
   { kT_Choice, kO_DialogSpeed, "Velocidad del texto", "Qué tan rápido se escriben los diálogos. Instantánea muestra cada página completa de una." },
   { kT_Toggle, kO_Feature + 14, "Acelerar con A y B", "Mantené A para que el texto vaya el doble de rápido; B escribe el resto del cuadro de una." },
+  { kT_Header, 0, "Progreso", NULL },
+  { kT_Toggle, kO_AchToasts, "Avisos de logros", "Muestra un cartel al conseguir objetos, corazones, colgantes, cristales y logros." },
 };
 
 static const OptDef kCheats[] = {
@@ -211,6 +220,8 @@ static const CtlDef kControls[] = {
   { 0, kKeys_Load + 3, "Cargar state 4" },
   { 0, kKeys_Save + 4, "Guardar state 5" },
   { 0, kKeys_Load + 4, "Cargar state 5" },
+  { 1, 0, "Otros" },
+  { 0, kKeys_Screenshot, "Captura de pantalla" },
 };
 
 // ---------------------------------------------------------------------------
@@ -319,6 +330,163 @@ static void SaveAspect(int choice) {
   Config_SetOverride("General", "ExtendedAspectRatio", buf);
 }
 
+// ---------------------------------------------------------------------------
+// MSU packs: files named <prefix><track>.<ext> in the msu* folders
+// ---------------------------------------------------------------------------
+
+typedef struct MsuPack {
+  char prefix[200];  // what MSUPath is set to
+  char name[80];
+} MsuPack;
+
+static MsuPack g_packs[24];
+static int g_num_packs = -1;
+static uint8 g_msu_mode = kMsuEnabled_Msu;  // EnableMSU value to use when turned back on
+static char *g_msu_path_alloc;
+
+typedef void ListDirFunc(void *ctx, const char *dir, const char *name, bool is_dir);
+
+static void ListDir(const char *dir, ListDirFunc *fn, void *ctx) {
+#ifdef _WIN32
+  char path[512];
+  snprintf(path, sizeof(path), "%s/*", dir);
+  struct _finddata_t fd;
+  intptr_t h = _findfirst(path, &fd);
+  if (h == -1)
+    return;
+  do {
+    if (fd.name[0] != '.')
+      fn(ctx, dir, fd.name, (fd.attrib & _A_SUBDIR) != 0);
+  } while (_findnext(h, &fd) == 0);
+  _findclose(h);
+#else
+  DIR *d = opendir(dir);
+  if (!d)
+    return;
+  struct dirent *de;
+  while ((de = readdir(d)) != NULL) {
+    if (de->d_name[0] == '.')
+      continue;
+    char full[1024];
+    snprintf(full, sizeof(full), "%s/%s", dir, de->d_name);
+    struct stat st;
+    fn(ctx, dir, de->d_name, stat(full, &st) == 0 && S_ISDIR(st.st_mode));
+  }
+  closedir(d);
+#endif
+}
+
+typedef struct PackScan {
+  char prefix[16][96];
+  int count[16], fmt[16];
+  int n;
+} PackScan;
+
+static const char *const kMsuExts[] = { "pcm", "opuz", "ogg", "flac", "mp3", "wav" };
+
+static void PackScanFile(void *ctx, const char *dir, const char *name, bool is_dir) {
+  PackScan *ps = (PackScan *)ctx;
+  const char *dot = strrchr(name, '.');
+  if (is_dir || !dot)
+    return;
+  int ext = -1;
+  for (int i = 0; i < 6; i++)
+    if (SDL_strcasecmp(dot + 1, kMsuExts[i]) == 0) ext = i;
+  const char *d = dot;
+  while (d > name && d[-1] >= '0' && d[-1] <= '9')
+    d--;
+  if (ext < 0 || d == dot || d == name || dot - d > 3 || (size_t)(d - name) >= sizeof(ps->prefix[0]))
+    return;
+  char prefix[96];
+  memcpy(prefix, name, d - name);
+  prefix[d - name] = 0;
+  int i;
+  for (i = 0; i < ps->n; i++)
+    if (strcmp(ps->prefix[i], prefix) == 0)
+      break;
+  if (i == ps->n) {
+    if (ps->n == 16)
+      return;
+    strcpy(ps->prefix[ps->n], prefix);
+    ps->count[ps->n] = 0;
+    ps->fmt[ps->n++] = ext;
+  }
+  ps->count[i]++;
+}
+
+static void NormalizePath(char *s) {
+  for (; *s; s++)
+    if (*s == '\\') *s = '/';
+}
+
+static void AddPacksIn(const char *dir) {
+  PackScan ps = { 0 };
+  ListDir(dir, PackScanFile, &ps);
+  static const char *const kFmtNames[] = { "PCM", "OPUZ", "OGG", "FLAC", "MP3", "WAV" };
+  for (int i = 0; i < ps.n && g_num_packs < countof(g_packs); i++) {
+    if (ps.count[i] < 3)
+      continue;
+    MsuPack *p = &g_packs[g_num_packs];
+    snprintf(p->prefix, sizeof(p->prefix), "%s/%s", dir, ps.prefix[i]);
+    NormalizePath(p->prefix);
+    bool dup = false;
+    for (int j = 0; j < g_num_packs; j++)
+      dup |= SDL_strcasecmp(g_packs[j].prefix, p->prefix) == 0;
+    if (dup)
+      continue;
+    snprintf(p->name, sizeof(p->name), "%s (%s, %d)", dir, kFmtNames[ps.fmt[i]], ps.count[i]);
+    g_num_packs++;
+  }
+}
+
+static void PackScanDir(void *ctx, const char *dir, const char *name, bool is_dir) {
+  if (!is_dir)
+    return;
+  char sub[512];
+  snprintf(sub, sizeof(sub), "%s/%s", dir, name);
+  if (ctx || SDL_strncasecmp(name, "msu", 3) == 0) {
+    AddPacksIn(strcmp(dir, ".") == 0 ? name : sub);
+    if (!ctx)
+      ListDir(name, PackScanDir, (void *)1);  // one level below
+  }
+}
+
+static void ScanMsuPacks() {
+  g_num_packs = 0;
+  // The folder of the pack in use first, then msu* folders and their subfolders.
+  if (g_config.msu_path) {
+    char dir[256];
+    snprintf(dir, sizeof(dir), "%s", g_config.msu_path);
+    NormalizePath(dir);
+    char *slash = strrchr(dir, '/');
+    if (slash) {
+      *slash = 0;
+      AddPacksIn(dir);
+    }
+  }
+  ListDir(".", PackScanDir, NULL);
+}
+
+static int CurrentMsuPack() {
+  if (g_num_packs < 0)
+    ScanMsuPacks();
+  char cur[256];
+  snprintf(cur, sizeof(cur), "%s", g_config.msu_path ? g_config.msu_path : "");
+  NormalizePath(cur);
+  for (int i = 0; i < g_num_packs; i++)
+    if (SDL_strcasecmp(g_packs[i].prefix, cur) == 0)
+      return i;
+  return -1;
+}
+
+static void SaveMsuMode() {
+  uint8 m = g_config.enable_msu;
+  const char *v = !m ? "false" :
+      (m & kMsuEnabled_MsuDeluxe) && (m & kMsuEnabled_Opuz) ? "deluxe-opuz" :
+      (m & kMsuEnabled_MsuDeluxe) ? "deluxe" : (m & kMsuEnabled_Opuz) ? "opuz" : "true";
+  Config_SetOverride("Sound", "EnableMSU", v);
+}
+
 static int GetValue(int id) {
   switch (id) {
   case kO_Volume: return g_config.volume;
@@ -346,6 +514,10 @@ static int GetValue(int id) {
   case kO_SaveHold: return g_config.save_hold_ms;
   case kO_TransitionSpeed: return g_config.transition_speed;
   case kO_DialogSpeed: return g_config.dialog_speed;
+  case kO_Msu: return g_config.enable_msu != 0;
+  case kO_MsuPack: return CurrentMsuPack();
+  case kO_ResumeMsu: return g_config.resume_msu;
+  case kO_AchToasts: return g_config.achievement_toasts;
   case kO_CheatHealth: return (g_cheats & kCheat_Health) != 0;
   case kO_CheatMagic: return (g_cheats & kCheat_Magic) != 0;
   case kO_CheatInfAmmo: return (g_cheats & kCheat_Ammo) != 0;
@@ -427,6 +599,12 @@ static void FormatValue(int id, char *buf, size_t n) {
     break;
   case kO_MenuButtons:
     snprintf(buf, n, "%s", v ? "Xbox (A abajo)" : "Nintendo (A a la derecha)");
+    break;
+  case kO_MsuPack:
+    if (v >= 0)
+      snprintf(buf, n, "%s", g_packs[v].name);
+    else
+      snprintf(buf, n, "%s", g_num_packs ? "Otro" : "No hay packs");
     break;
   default:
     snprintf(buf, n, "%s", v ? "Sí" : "No");
@@ -577,6 +755,22 @@ static void ChangeOption(int id, int dir) {
     SaveInt("General", "TransitionSpeed", g_config.transition_speed);
     return;
   }
+  if (type == kT_Choice && id == kO_MsuPack) {
+    if (g_num_packs <= 0)
+      return;
+    if (dir == 0) dir = 1;
+    int cur = CurrentMsuPack();
+    int p = cur < 0 ? 0 : (cur + dir + g_num_packs) % g_num_packs;
+    free(g_msu_path_alloc);
+    g_config.msu_path = g_msu_path_alloc = strdup(g_packs[p].prefix);
+    Config_SetOverride("Sound", "MSUPath", g_packs[p].prefix);
+    if (!g_config.enable_msu) {
+      g_config.enable_msu = g_msu_mode;
+      SaveMsuMode();
+    }
+    ZeldaRestartMusic(g_config.enable_msu);
+    return;
+  }
   if (type == kT_Choice && id == kO_DialogSpeed) {
     // Normal -> x2 -> x3 -> x4 -> instant
     static const int8 kOrder[5] = { 1, 2, 3, 4, 0 };
@@ -640,6 +834,23 @@ static void ChangeOption(int id, int dir) {
     g_config.discord = on;
     Discord_Configure(g_config.discord, g_config.discord_location);
     SaveInt("General", "Discord", on);
+    break;
+  case kO_Msu:
+    if (!on && g_config.enable_msu)
+      g_msu_mode = g_config.enable_msu;
+    g_config.enable_msu = on ? g_msu_mode : 0;
+    SaveMsuMode();
+    ZeldaRestartMusic(g_config.enable_msu);
+    if (on && !ZeldaIsMusicPlaying())
+      SetMsg("No se encontró la pista en el pack elegido%s", NULL);
+    break;
+  case kO_ResumeMsu:
+    g_config.resume_msu = on;
+    SaveInt("Sound", "ResumeMSU", on);
+    break;
+  case kO_AchToasts:
+    g_config.achievement_toasts = on;
+    SaveInt("General", "AchievementToasts", on);
     break;
   case kO_DiscordLocation:
     g_config.discord_location = on;

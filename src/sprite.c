@@ -9,6 +9,7 @@
 #include "overlord.h"
 #include "ancilla.h"
 #include "player.h"
+#include "stats.h"
 #include "misc.h"
 #include "overlord.h"
 #include "tile_detect.h"
@@ -2413,6 +2414,7 @@ void Sprite_MiniMoldorm_Recoil(int k) {  // 86eec8
   sprite_give_damage[k] = 0;
   if (t > 0)
     return;
+  Stats_OnEnemyDefeated();
 
   if (sprite_die_action[k] == 0) {
     if (sprite_state[k] == 11)

@@ -1,3 +1,4 @@
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,6 +14,7 @@
 #include "savemenu.h"
 #include "menu_draw.h"
 #include "optmenu.h"
+#include "stats.h"
 
 enum {
   kKind_Auto = 0,
@@ -35,7 +37,12 @@ typedef struct ThumbHeader {
   int64 time;
   uint8 kind, hearts, max_hearts, pad;
   char loc[kLocLen];
+  // version 2
+  uint32 play_seconds;  // play time of the save file when saved
+  int32 file;           // save file 0-2, -1 = none
 } ThumbHeader;
+
+enum { kThumbHeaderV1Size = offsetof(ThumbHeader, play_seconds) };
 
 typedef struct MenuEntry {
   char sav[64];
@@ -162,9 +169,14 @@ static bool ReadThumbHeader(const char *sav, ThumbHeader *hdr, uint32 **pixels) 
   FILE *f = fopen(thm, "rb");
   if (!f)
     return false;
-  bool ok = fread(hdr, 1, sizeof(*hdr), f) == sizeof(*hdr) &&
-            memcmp(hdr->magic, kThumbMagic, 4) == 0 && hdr->version == 1 &&
+  memset(hdr, 0, sizeof(*hdr));
+  bool ok = fread(hdr, 1, kThumbHeaderV1Size, f) == kThumbHeaderV1Size &&
+            memcmp(hdr->magic, kThumbMagic, 4) == 0 && (hdr->version == 1 || hdr->version == 2) &&
             hdr->w <= 512 && hdr->h <= 512;
+  if (ok && hdr->version == 2)
+    ok = fread((uint8 *)hdr + kThumbHeaderV1Size, 1, sizeof(*hdr) - kThumbHeaderV1Size, f) == sizeof(*hdr) - kThumbHeaderV1Size;
+  if (ok && hdr->version == 1)
+    hdr->file = -1;
   if (ok) {
     hdr->loc[kLocLen - 1] = 0;
     if (pixels && hdr->w && hdr->h) {
@@ -184,8 +196,10 @@ static void WriteThumb(const char *sav, int kind) {
   ThumbHeader hdr;
   memset(&hdr, 0, sizeof(hdr));
   memcpy(hdr.magic, kThumbMagic, 4);
-  hdr.version = 1;
+  hdr.version = 2;
   hdr.time = (int64)time(NULL);
+  hdr.file = Stats_CurrentFile();
+  hdr.play_seconds = Stats_PlaySeconds(hdr.file);
   hdr.kind = kind;
   hdr.hearts = link_health_current;
   hdr.max_hearts = link_health_capacity;
@@ -264,6 +278,10 @@ static void ShowToast(const char *msg) {
 
 void SaveMenu_ShowToast(const char *msg) {
   ShowToast(msg);
+}
+
+bool SaveMenu_ToastActive() {
+  return g_sm.toast_frames > 0;
 }
 
 static bool g_kbd_hints;
@@ -635,6 +653,11 @@ void SaveMenu_Input(int action) {
     SaveTabInput(action);
     return;
   }
+  if (g_sm.tab == kMenuTab_Stats) {
+    if (!Stats_MenuInput(action))
+      SaveMenu_Toggle();
+    return;
+  }
   if (g_sm.tab != kMenuTab_Saves) {
     if (!OptMenu_Input(OptPageForTab(g_sm.tab), action))
       SaveMenu_Toggle();
@@ -731,8 +754,16 @@ static void DrawEntries(Canvas *c, MenuEntry *ents, int n, int *sel, int *scroll
     DrawText(c, prev_x, y, e->hdr.loc, kCol_Gold, preview_w);
     y += 15;
   }
-  if (e->hdr.max_hearts && y + 8 < height - 22)
+  if (e->hdr.max_hearts && y + 8 < height - 22) {
     DrawHearts(c, prev_x, y + 1, e->hdr.hearts, e->hdr.max_hearts, preview_w);
+    y += 15;
+  }
+  if (e->hdr.file >= 0 && e->hdr.play_seconds && y + 10 < height - 22) {
+    char t[32];
+    Stats_FormatTime(e->hdr.play_seconds, t, sizeof(t));
+    snprintf(buf, sizeof(buf), "Partida %d · %s jugados", e->hdr.file + 1, t);
+    DrawText(c, prev_x, y, buf, kCol_Gray, preview_w);
+  }
 }
 
 void SaveMenu_Draw(uint8 *pixels, int pitch, int width, int height) {
@@ -751,10 +782,19 @@ void SaveMenu_Draw(uint8 *pixels, int pitch, int width, int height) {
   }
 
   // Tabs
-  static const char *const kTabNames[kMenuTab_Count] = { "Cargar", "Guardar", "Opciones", "Controles", "Trucos" };
+  static const char *const kTabNames[kMenuTab_Count] = { "Cargar", "Guardar", "Opciones", "Controles", "Trucos", "Progreso" };
   int tx = 12;
   bool wide = width >= 360;
-  bool tab_glyphs = wide && !g_kbd_hints;
+  // Narrower gaps, and no L/R prompts, when the tabs don't fit.
+  int tabs_w = 0;
+  for (int t = 0; t < kMenuTab_Count; t++)
+    tabs_w += MeasureText(kTabNames[t]) + 12;
+  int tab_gap = 12;
+  bool tab_glyphs = wide && !g_kbd_hints && tabs_w + 2 * 22 <= width - 24;
+  if (tabs_w > width - 24)
+    tab_gap = 12 - (tabs_w - (width - 24) + kMenuTab_Count - 1) / kMenuTab_Count;
+  if (tab_gap < 6)
+    tab_gap = 6;
   if (tab_glyphs)
     tx += DrawButtonGlyph(&c, tx, 6, "L", false) + 8;
   for (int t = 0; t < kMenuTab_Count; t++) {
@@ -764,7 +804,7 @@ void SaveMenu_Draw(uint8 *pixels, int pitch, int width, int height) {
       FillRect(&c, tx - 4, 21, tw + 8, 2, kCol_Gold, 256);
     }
     DrawText(&c, tx, 6, kTabNames[t], t == g_sm.tab ? kCol_Gold : kCol_Gray, -1);
-    tx += tw + 12;
+    tx += tw + tab_gap;
   }
   if (tab_glyphs)
     tx += DrawButtonGlyph(&c, tx - 4, 6, "R", false) + 4;
@@ -781,6 +821,7 @@ void SaveMenu_Draw(uint8 *pixels, int pitch, int width, int height) {
   FillRect(&c, 10, height - 20, width - 20, 1, kCol_DarkGold, 256);
   const char *hint = g_sm.tab == kMenuTab_Saves ? "LR:Pestaña|B:Volver|A:Cargar" :
       g_sm.tab == kMenuTab_Save ? (g_sm.confirm >= 0 ? "B:No|A:Sí" : "LR:Pestaña|B:Volver|A:Guardar") :
+      g_sm.tab == kMenuTab_Stats ? "LR:Pestaña|DPAD:Mover|B:Cerrar" :
       OptMenu_Hint(OptPageForTab(g_sm.tab), wide);
   DrawHintBar(&c, 12, width - 12, height - 16, hint, g_kbd_hints);
 
@@ -799,6 +840,10 @@ void SaveMenu_Draw(uint8 *pixels, int pitch, int width, int height) {
     return;
   }
 
+  if (g_sm.tab == kMenuTab_Stats) {
+    Stats_MenuDraw(&c, 30, height - 22);
+    return;
+  }
   if (g_sm.tab != kMenuTab_Saves) {
     OptMenu_Draw(OptPageForTab(g_sm.tab), &c, 30, height - 22);
     return;

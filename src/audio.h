@@ -5,6 +5,9 @@
 
 // Things for msu
 bool ZeldaIsPlayingMusicTrack(uint8 track);
+// After changing EnableMSU / MSUPath in the menu: plays the current song again
+// with the new setting (MSU or the original music).
+void ZeldaRestartMusic(uint8 enable_msu);
 bool ZeldaIsPlayingMusicTrackWithBug(uint8 track);
 void ZeldaPlayMsuAudioTrack(uint8 track);
 bool ZeldaIsMusicPlaying();

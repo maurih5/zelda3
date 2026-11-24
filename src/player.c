@@ -13,6 +13,7 @@
 #include "misc.h"
 #include "player_oam.h"
 #include "sprite_main.h"
+#include "stats.h"
 
 static bool g_ApplyLinksMovementToCamera_called;
 
@@ -165,6 +166,7 @@ void Link_ControlHandler() {  // 87807f
         Ancilla_Sfx2_Near(38);
         Haptic_Event(kHaptic_DamageTaken, dmg);
         number_of_times_hurt_by_sprites++;
+        Stats_OnHurt();
         // Cheat: infinite health (still knocked back)
         uint8 new_dmg = (g_cheats & kCheat_Health) ? link_health_current : link_health_current - dmg;
         if (new_dmg == 0 || new_dmg >= 0xa8) {

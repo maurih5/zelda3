@@ -38,6 +38,7 @@ enum {
   kKeys_Rewind,
   kKeys_SaveMenu,
   kKeys_Quit,
+  kKeys_Screenshot,
   kKeys_Total,
 };
 
@@ -87,7 +88,8 @@ typedef struct Config {
   int save_hold_ms;        // hold the save state key this long to save, 0 = instant
   int turbo_speed;         // game frames per shown frame while Turbo is held, 0 = as fast as possible
   int transition_speed;    // screen transitions: 1 = normal, 2-4 = that many times faster, 0 = instant
-  int dialog_speed;        // text: 1 = normal, 2-4 = that many times faster, 0 = a whole page at once
+  int dialog_speed;
+  bool achievement_toasts;  // notices when getting items, hearts, crystals and achievements        // text: 1 = normal, 2-4 = that many times faster, 0 = a whole page at once
 
   const char *link_graphics;
   char *memory_buffer;
