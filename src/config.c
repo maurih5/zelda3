@@ -530,6 +530,10 @@ static bool HandleIniConfig(int section, const char *key, char *value) {
     } else if (StringEqualsNoCase(key, "StickDeadzone")) {
       g_config.stick_deadzone = IntMin(IntMax(atoi(value), 5), 90);
       return true;
+    } else if (StringEqualsNoCase(key, "WindowBorderless")) {
+      return ParseBool(value, &g_config.window_borderless);
+    } else if (StringEqualsNoCase(key, "NintendoMenuButtons")) {
+      return ParseBool(value, &g_config.nintendo_menu_buttons);
     } else if (StringEqualsNoCase(key, "Discord")) {
       return ParseBool(value, &g_config.discord);
     } else if (StringEqualsNoCase(key, "DiscordLocation")) {
@@ -715,6 +719,7 @@ void ParseConfigFile(const char *filename) {
   g_config.turbo_speed = 0;
   g_config.save_hold_ms = 1000;
   g_config.discord = true;
+  g_config.nintendo_menu_buttons = true;
   g_config.discord_location = true;
   g_config.discord_app_id = "1574572493212225667";
   SetDefaultKeys();

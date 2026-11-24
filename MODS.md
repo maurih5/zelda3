@@ -68,6 +68,20 @@ DiscordLocation = 1
 DiscordAppId = 1574572493212225667   # your own Discord application id
 ```
 
+## Display mode and menu buttons
+The options menu chooses window / borderless window / fullscreen and the
+window size (x1-x6); both are remembered. Menus use the Nintendo button
+layout by default (right face button accepts, bottom goes back, as A and B
+in the game) with console-style button prompts at the bottom right; keyboard
+keys are shown instead after using the keyboard.
+
+```ini
+[Graphics]
+WindowBorderless = 0
+[General]
+NintendoMenuButtons = 1   # 0 = Xbox layout (bottom accepts)
+```
+
 ## Building on Windows without MSBuild
 `build_msvc.bat [out.exe] [extra defines]` builds with the Visual Studio Build
 Tools. It expects the SDL2 development package (VC) extracted to

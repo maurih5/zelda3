@@ -43,4 +43,10 @@ void DrawHeart(Canvas *c, int x, int y, int fill /* 0, 1=half, 2=full */);
 int DrawHearts(Canvas *c, int x, int y, int hearts, int max_hearts, int max_w);
 void DrawImage(Canvas *c, int x, int y, int dw, int dh, const uint32 *src, int sw, int sh);
 
+// Button prompts: A B X Y (round), L R (pills), DPAD; |keyboard| draws a key cap with the name.
+int ButtonGlyphWidth(const char *name, bool keyboard);
+int DrawButtonGlyph(Canvas *c, int x, int y, const char *name, bool keyboard);
+// spec = "A:Elegir|B:Volver|LR:Pestaña|DPAD:Cambiar|X:Borrar", right-aligned at |right|.
+void DrawHintBar(Canvas *c, int left, int right, int y, const char *spec, bool keyboard);
+
 #endif  // ZELDA3_MENU_DRAW_H_

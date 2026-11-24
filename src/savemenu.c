@@ -262,6 +262,12 @@ void SaveMenu_ShowToast(const char *msg) {
   ShowToast(msg);
 }
 
+static bool g_kbd_hints;
+
+void SaveMenu_SetKeyboardHints(bool keyboard) {
+  g_kbd_hints = keyboard;
+}
+
 static char g_progress_msg[96];
 static int g_progress = -1;
 
@@ -584,10 +590,9 @@ void SaveMenu_Draw(uint8 *pixels, int pitch, int width, int height) {
   static const char *const kTabNames[kMenuTab_Count] = { "Guardados", "Opciones", "Controles" };
   int tx = 12;
   bool wide = width >= 360;
-  if (wide) {
-    DrawText(&c, tx, 6, "LB", kCol_DarkGold, -1);
-    tx += MeasureText("LB") + 8;
-  }
+  bool tab_glyphs = wide && !g_kbd_hints;
+  if (tab_glyphs)
+    tx += DrawButtonGlyph(&c, tx, 6, "L", false) + 8;
   for (int t = 0; t < kMenuTab_Count; t++) {
     int tw = MeasureText(kTabNames[t]);
     if (t == g_sm.tab) {
@@ -597,8 +602,8 @@ void SaveMenu_Draw(uint8 *pixels, int pitch, int width, int height) {
     DrawText(&c, tx, 6, kTabNames[t], t == g_sm.tab ? kCol_Gold : kCol_Gray, -1);
     tx += tw + 12;
   }
-  if (wide)
-    DrawText(&c, tx - 4, 6, "RB", kCol_DarkGold, -1);
+  if (tab_glyphs)
+    tx += DrawButtonGlyph(&c, tx - 4, 6, "R", false) + 4;
   char buf[96];
   if (g_sm.tab == kMenuTab_Saves && g_sm.num_ents) {
     snprintf(buf, sizeof(buf), "%d / %d", g_sm.sel + 1, g_sm.num_ents);
@@ -612,8 +617,8 @@ void SaveMenu_Draw(uint8 *pixels, int pitch, int width, int height) {
   FillRect(&c, 10, height - 20, width - 20, 1, kCol_DarkGold, 256);
   const char *hint = g_sm.tab != kMenuTab_Saves ?
       OptMenu_Hint(g_sm.tab == kMenuTab_Options ? kOptPage_Options : kOptPage_Controls, wide) :
-      wide ? "A / Enter: Cargar      B / Esc: Volver      LB/RB: Pestaña" : "A: Cargar   B: Volver";
-  DrawText(&c, 12, height - 17, hint, kCol_Gray, width - 24);
+      "LR:Pestaña|B:Volver|A:Cargar";
+  DrawHintBar(&c, 12, width - 12, height - 16, hint, g_kbd_hints);
 
   if (g_sm.tab != kMenuTab_Saves) {
     OptMenu_Draw(g_sm.tab == kMenuTab_Options ? kOptPage_Options : kOptPage_Controls, &c, 30, height - 22);

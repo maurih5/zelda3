@@ -34,6 +34,11 @@ int OptMenu_ChangeVolume(int delta);
 // Implemented in main.c
 bool Main_IsFullscreen();
 void Main_SetFullscreen(bool on);
+// 0 = window, 1 = borderless window, 2 = fullscreen
+int Main_GetDisplayMode();
+void Main_SetDisplayMode(int mode);
+int Main_GetWindowScale();
+void Main_SetWindowScale(int scale);
 int Main_GetRenderFlags();
 void Main_SetRenderFlags(int flags);
 bool Main_ShaderSupported();

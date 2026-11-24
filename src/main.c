@@ -466,6 +466,8 @@ int main(int argc, char** argv) {
   Discord_Init(g_config.discord_app_id);
   g_wide_hud = g_config.wide_hud;
 
+  if (g_config.window_borderless)
+    g_win_flags |= SDL_WINDOW_BORDERLESS;
   if (g_config.fullscreen == 1)
     g_win_flags ^= SDL_WINDOW_FULLSCREEN_DESKTOP;
   else if (g_config.fullscreen == 2)
@@ -635,6 +637,7 @@ int main(int argc, char** argv) {
       g_menu_last_stick = pad;
       SDL_LockMutex(g_audio_mutex);
       if (!OptMenu_IsCapturing()) {
+        if (pressed & 0xf0) SaveMenu_SetKeyboardHints(false);
         if (pressed & (1 << 4)) SaveMenu_Input(kSaveMenu_Up);
         if (pressed & (1 << 5)) SaveMenu_Input(kSaveMenu_Down);
         if (pressed & (1 << 6)) SaveMenu_Input(kSaveMenu_Left);
@@ -962,7 +965,7 @@ int main(int argc, char** argv) {
         printf("Volumen %d -> %d\n", vol0, g_config.volume);
         SelftestCheck(g_config.volume == vol0 - 20, "izquierda baja el volumen");
         SDL_LockMutex(g_audio_mutex);
-        for (int i = 0; i < 24; i++) SaveMenu_Input(kSaveMenu_Down);
+        for (int i = 0; i < 26; i++) SaveMenu_Input(kSaveMenu_Down);
         uint32 feat0 = g_config.features0;
         SaveMenu_Input(kSaveMenu_Ok);
         SDL_UnlockMutex(g_audio_mutex);
@@ -970,7 +973,7 @@ int main(int argc, char** argv) {
                       (g_wanted_zelda_features & kFeatures0_TurnWhileDashing), "A activa 'Girar al correr'");
         SelftestDumpMenu("selftest_opt2.bmp");
         SDL_LockMutex(g_audio_mutex);
-        for (int i = 0; i < 21; i++) SaveMenu_Input(kSaveMenu_Up);
+        for (int i = 0; i < 23; i++) SaveMenu_Input(kSaveMenu_Up);
         SaveMenu_Input(kSaveMenu_Ok);  // Shader (needs OpenGL)
         SDL_UnlockMutex(g_audio_mutex);
         SelftestDumpMenu("selftest_opt3.bmp");
@@ -1326,6 +1329,32 @@ bool Main_IsFullscreen() {
   return (g_win_flags & SDL_WINDOW_FULLSCREEN) != 0;
 }
 
+int Main_GetDisplayMode() {
+  if (Main_IsFullscreen())
+    return 2;
+  return (g_win_flags & SDL_WINDOW_BORDERLESS) ? 1 : 0;
+}
+
+void Main_SetDisplayMode(int mode) {
+  Main_SetFullscreen(mode == 2);
+  if (mode != 2) {
+    if (mode == 1)
+      g_win_flags |= SDL_WINDOW_BORDERLESS;
+    else
+      g_win_flags &= ~SDL_WINDOW_BORDERLESS;
+    SDL_SetWindowBordered(g_window, mode != 1);
+  }
+}
+
+int Main_GetWindowScale() {
+  return g_current_window_scale;
+}
+
+void Main_SetWindowScale(int scale) {
+  g_current_window_scale = scale;
+  ChangeWindowScale(0);
+}
+
 void Main_SetFullscreen(bool on) {
   if (on == Main_IsFullscreen())
     return;
@@ -1398,15 +1427,21 @@ static bool HandleSaveMenuKeyRepeats(int key, int mod) {
 }
 
 static void HandleSaveMenuKey(int key, int mod) {
+  SaveMenu_SetKeyboardHints(true);
   int a = SaveMenuActionForKey(key, mod);
   if (a >= 0)
     SaveMenuAction(a);
 }
 
-// Uses the Xbox button convention: A accepts, B goes back.
+// Nintendo convention (default): the right face button accepts and the bottom
+// one goes back, like A and B in the game. Xbox convention: the other way.
 static void HandleSaveMenuGamepad(int button) {
+  bool nin = g_config.nintendo_menu_buttons;
+  int ok = nin ? kGamepadBtn_B : kGamepadBtn_A, back = nin ? kGamepadBtn_A : kGamepadBtn_B;
+  int clear = nin ? kGamepadBtn_Y : kGamepadBtn_X;
+  SaveMenu_SetKeyboardHints(false);
   // The combo that opens the menu also closes it.
-  if (button != kGamepadBtn_A && FindCmdForGamepadButton(button, g_gamepad_modifiers) == kKeys_SaveMenu) {
+  if (button != ok && FindCmdForGamepadButton(button, g_gamepad_modifiers) == kKeys_SaveMenu) {
     SaveMenuAction(kSaveMenu_Back);
     return;
   }
@@ -1417,9 +1452,11 @@ static void HandleSaveMenuGamepad(int button) {
   case kGamepadBtn_DpadRight: SaveMenuAction(kSaveMenu_Right); break;
   case kGamepadBtn_L1: SaveMenuAction(kSaveMenu_PrevTab); break;
   case kGamepadBtn_R1: SaveMenuAction(kSaveMenu_NextTab); break;
-  case kGamepadBtn_A: SaveMenuAction(kSaveMenu_Ok); break;
-  case kGamepadBtn_B: SaveMenuAction(kSaveMenu_Back); break;
-  case kGamepadBtn_X: SaveMenuAction(kSaveMenu_Clear); break;
+  default:
+    if (button == ok) SaveMenuAction(kSaveMenu_Ok);
+    else if (button == back) SaveMenuAction(kSaveMenu_Back);
+    else if (button == clear) SaveMenuAction(kSaveMenu_Clear);
+    break;
   case kGamepadBtn_Start:
     // The same combo that opens the menu (View+Start) closes it.
     SaveMenuAction((g_gamepad_modifiers & (1 << kGamepadBtn_Back)) ? kSaveMenu_Back : kSaveMenu_Ok);

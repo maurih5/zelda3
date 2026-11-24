@@ -39,6 +39,9 @@ enum {
   kO_Sfx,
   kO_Shader,
   kO_Fullscreen,
+  kO_DisplayMode,
+  kO_WindowScale,
+  kO_MenuButtons,
   kO_KeepAspect,
   kO_Linear,
   kO_NewRenderer,
@@ -98,13 +101,15 @@ static const OptDef kOptions[] = {
   { kT_Choice, kO_Aspect, "Formato de pantalla", "Ancho de la imagen. Se aplica al reiniciar el juego." },
   { kT_Toggle, kO_WideHud, "HUD en los bordes", "En pantalla ancha, lleva la magia y los ítems a la izquierda y los corazones a la derecha." },
   { kT_Toggle, kO_EdgeEffect, "Rellenar bordes", "En pantalla ancha, rellena las franjas negras con un reflejo borroso de la escena." },
-  { kT_Toggle, kO_Fullscreen, "Pantalla completa", "Alternar entre ventana y pantalla completa." },
+  { kT_Choice, kO_DisplayMode, "Modo de pantalla", "Ventana, ventana sin bordes o pantalla completa. Alt+Enter también alterna." },
+  { kT_Choice, kO_WindowScale, "Tamaño de ventana", "Tamaño de la ventana en modo ventana (múltiplos de la imagen original)." },
   { kT_Toggle, kO_KeepAspect, "Mantener proporción", "Si se desactiva, la imagen se estira para llenar la pantalla." },
   { kT_Toggle, kO_Linear, "Filtro suave", "Suaviza los píxeles. Sin efecto mientras haya un shader activo." },
   { kT_Toggle, kO_NewRenderer, "Renderizador rápido", "Renderizador optimizado del PPU. Desactivalo si ves errores gráficos." },
   { kT_Toggle, kO_Mode7, "Mapa en alta resolución", "Dibuja el mapa del mundo (Mode 7) con 4 veces más resolución." },
   { kT_Toggle, kO_NoSpriteLimits, "Sin límite de sprites", "Evita que los sprites parpadeen o desaparezcan cuando hay muchos juntos." },
   { kT_Header, 0, "Joystick", NULL },
+  { kT_Choice, kO_MenuButtons, "Botones del menú", "Nintendo: el botón de la derecha elige y el de abajo vuelve, como en el juego. Xbox: al revés." },
   { kT_Slider, kO_Rumble, "Vibración", "Fuerza de la vibración con espadazos, golpes, daño, ítems, bombas y cofres. 0 la apaga." },
   { kT_Slider, kO_Deadzone, "Zona muerta del stick", "Cuánto hay que mover el stick antes de que Link camine. Subila si Link se mueve solo." },
   { kT_Header, 0, "Discord", NULL },
@@ -293,6 +298,9 @@ static int GetValue(int id) {
   case kO_Music: return g_config.msuvolume;
   case kO_Sfx: return g_config.sfx_volume;
   case kO_Fullscreen: return Main_IsFullscreen();
+  case kO_DisplayMode: return Main_GetDisplayMode();
+  case kO_WindowScale: return Main_GetWindowScale();
+  case kO_MenuButtons: return g_config.nintendo_menu_buttons ? 0 : 1;
   case kO_KeepAspect: return !g_config.ignore_aspect_ratio;
   case kO_Linear: return g_config.linear_filtering;
   case kO_NewRenderer: return g_config.new_renderer;
@@ -365,6 +373,17 @@ static void FormatValue(int id, char *buf, size_t n) {
     break;
   case kO_Aspect:
     snprintf(buf, n, "%s", kAspectNames[v]);
+    break;
+  case kO_DisplayMode: {
+    static const char *const kNames[3] = { "Ventana", "Ventana sin bordes", "Pantalla completa" };
+    snprintf(buf, n, "%s", kNames[v < 0 || v > 2 ? 0 : v]);
+    break;
+  }
+  case kO_WindowScale:
+    snprintf(buf, n, "x%d", v);
+    break;
+  case kO_MenuButtons:
+    snprintf(buf, n, "%s", v ? "Xbox (A abajo)" : "Nintendo (A a la derecha)");
     break;
   default:
     snprintf(buf, n, "%s", v ? "Sí" : "No");
@@ -446,6 +465,29 @@ static void ChangeOption(int id, int dir) {
     return;
   }
 
+  if (type == kT_Choice && id == kO_DisplayMode) {
+    if (dir == 0) dir = 1;
+    int m = (Main_GetDisplayMode() + dir + 3) % 3;
+    Main_SetDisplayMode(m);
+    SaveInt("Graphics", "Fullscreen", m == 2);
+    SaveInt("Graphics", "WindowBorderless", m == 1);
+    return;
+  }
+  if (type == kT_Choice && id == kO_WindowScale) {
+    if (dir == 0) dir = 1;
+    int s = Main_GetWindowScale() + dir;
+    s = s < 1 ? 6 : s > 6 ? 1 : s;
+    Main_SetWindowScale(s);
+    SaveInt("Graphics", "WindowScale", s);
+    if (Main_GetDisplayMode() == 2)
+      SetMsg("El tamaño se usa al volver a modo ventana%s", NULL);
+    return;
+  }
+  if (type == kT_Choice && id == kO_MenuButtons) {
+    g_config.nintendo_menu_buttons = !g_config.nintendo_menu_buttons;
+    SaveInt("General", "NintendoMenuButtons", g_config.nintendo_menu_buttons);
+    return;
+  }
   if (type == kT_Choice && id == kO_Aspect) {
     if (dir == 0) dir = 1;
     int c = (CurrentAspect() + dir + 5) % 5;
@@ -1216,9 +1258,10 @@ void OptMenu_Draw(int page, Canvas *c, int top, int bottom) {
 }
 
 const char *OptMenu_Hint(int page, bool wide) {
+  // Button prompts for DrawHintBar, least important first.
   if (page == kOptPage_Options && g_om.picker)
-    return wide ? "A / Enter: Elegir     B / Esc: Volver" : "A: Elegir   B: Volver";
+    return "B:Volver|A:Elegir";
   if (page == kOptPage_Options)
-    return wide ? "Izq./Der.: Cambiar   A: Elegir   B: Cerrar   LB/RB: Pestaña" : "Izq/Der: Cambiar  B: Cerrar";
-  return wide ? "A: Asignar   X: Borrar   B: Cerrar   LB/RB: Pestaña" : "A: Asignar  X: Borrar  B: Cerrar";
+    return "LR:Pestaña|DPAD:Cambiar|B:Cerrar|A:Elegir";
+  return "LR:Pestaña|X:Borrar|B:Cerrar|A:Asignar";
 }

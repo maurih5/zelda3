@@ -56,6 +56,8 @@ typedef struct Config {
   bool ignore_aspect_ratio;
   uint8 fullscreen;
   uint8 window_scale;
+  bool window_borderless;
+  bool nintendo_menu_buttons;  // menus: right face button accepts, bottom goes back
   bool enable_audio;
   bool linear_filtering;
   uint8 output_method;
