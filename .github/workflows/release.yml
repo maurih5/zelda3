@@ -55,7 +55,7 @@ jobs:
       - name: Dependencias
         run: sudo apt-get update && sudo apt-get install -y libsdl2-dev
       - name: Compilar
-        run: make -j$(nproc) zelda3 CFLAGS=-O2
+        run: CFLAGS=-O2 make -j$(nproc) zelda3   # por entorno: sin -Werror, sin pisar los -I del Makefile
       - name: Empaquetar
         run: |
           d=dist/zelda3
