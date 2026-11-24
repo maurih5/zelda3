@@ -408,7 +408,8 @@ void MirrorWarp_BuildDewavingHDMATable() {  // 80ff2f
 void TakeDamageFromPit() {  // 81ffd9
   link_visibility_status = 12;
   submodule_index = player_is_indoors ? 20 : 42;
-  link_health_current -= 8;
+  if (!(g_cheats & kCheat_Health))
+    link_health_current -= 8;
   if (link_health_current >= 0xa8)
     link_health_current = 0;
 }

@@ -15,6 +15,14 @@ enum {
   kHaptic_Environment,     // arg: kHapticEnv_*
   kHaptic_HookshotWall,
   kHaptic_BoomerangCatch,
+  kHaptic_Boots,           // arg: kHapticBoots_*
+};
+
+enum {
+  kHapticBoots_Charge,     // revving up (every few frames)
+  kHapticBoots_Launch,     // starts running
+  kHapticBoots_Step,       // running (every few frames)
+  kHapticBoots_Bonk,       // ran into a wall or a sprite
 };
 
 enum {

@@ -614,6 +614,11 @@ static void SaveTabInput(int action) {
   }
 }
 
+// Tabs drawn by optmenu.c
+static int OptPageForTab(int tab) {
+  return tab == kMenuTab_Options ? kOptPage_Options : tab == kMenuTab_Controls ? kOptPage_Controls : kOptPage_Cheats;
+}
+
 void SaveMenu_Input(int action) {
   if (!g_sm.open)
     return;
@@ -631,7 +636,7 @@ void SaveMenu_Input(int action) {
     return;
   }
   if (g_sm.tab != kMenuTab_Saves) {
-    if (!OptMenu_Input(g_sm.tab == kMenuTab_Options ? kOptPage_Options : kOptPage_Controls, action))
+    if (!OptMenu_Input(OptPageForTab(g_sm.tab), action))
       SaveMenu_Toggle();
     return;
   }
@@ -746,7 +751,7 @@ void SaveMenu_Draw(uint8 *pixels, int pitch, int width, int height) {
   }
 
   // Tabs
-  static const char *const kTabNames[kMenuTab_Count] = { "Cargar", "Guardar", "Opciones", "Controles" };
+  static const char *const kTabNames[kMenuTab_Count] = { "Cargar", "Guardar", "Opciones", "Controles", "Trucos" };
   int tx = 12;
   bool wide = width >= 360;
   bool tab_glyphs = wide && !g_kbd_hints;
@@ -776,7 +781,7 @@ void SaveMenu_Draw(uint8 *pixels, int pitch, int width, int height) {
   FillRect(&c, 10, height - 20, width - 20, 1, kCol_DarkGold, 256);
   const char *hint = g_sm.tab == kMenuTab_Saves ? "LR:Pestaña|B:Volver|A:Cargar" :
       g_sm.tab == kMenuTab_Save ? (g_sm.confirm >= 0 ? "B:No|A:Sí" : "LR:Pestaña|B:Volver|A:Guardar") :
-      OptMenu_Hint(g_sm.tab == kMenuTab_Options ? kOptPage_Options : kOptPage_Controls, wide);
+      OptMenu_Hint(OptPageForTab(g_sm.tab), wide);
   DrawHintBar(&c, 12, width - 12, height - 16, hint, g_kbd_hints);
 
   if (g_sm.tab == kMenuTab_Save) {
@@ -795,7 +800,7 @@ void SaveMenu_Draw(uint8 *pixels, int pitch, int width, int height) {
   }
 
   if (g_sm.tab != kMenuTab_Saves) {
-    OptMenu_Draw(g_sm.tab == kMenuTab_Options ? kOptPage_Options : kOptPage_Controls, &c, 30, height - 22);
+    OptMenu_Draw(OptPageForTab(g_sm.tab), &c, 30, height - 22);
     return;
   }
 

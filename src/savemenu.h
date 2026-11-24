@@ -26,6 +26,7 @@ enum {
   kMenuTab_Save,
   kMenuTab_Options,
   kMenuTab_Controls,
+  kMenuTab_Cheats,
   kMenuTab_Count,
 };
 

@@ -12,6 +12,8 @@
 enum {
   kOptPage_Options,
   kOptPage_Controls,
+  kOptPage_Cheats,
+  kOptPage_Count,
 };
 
 void OptMenu_Open();

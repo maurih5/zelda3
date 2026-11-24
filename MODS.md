@@ -45,7 +45,7 @@ SaveMenu = Back+Start
 ```
 
 ## Options and controls menu
-The same menu has **Saves / Options / Controls** tabs (LB/RB or Tab):
+The same menu has **Load / Save / Options / Controls / Cheats** tabs (LB/RB or Tab):
 
 - **Options**: master / music (MSU) / effects volume, a shader picker for the
   `glsl-shaders` folder that applies instantly (OpenGL output only), renderer
@@ -79,6 +79,31 @@ shown frame (the game logic is unchanged, only fewer frames are drawn).
 [General]
 TransitionSpeed = 2   # 1 = normal, 2-4 = that many times faster, 0 = instant
 ```
+
+## Dialog speed
+Text can be typed 2-4 times faster, or a whole page at once, without holding
+anything (the pause before the next page can be called up gets shorter too,
+but not to nothing). The "hold A / B writes the box" keys still work on top.
+
+```ini
+[General]
+DialogSpeed = 1   # 1 = normal, 2-4 = that many times faster, 0 = a page at once
+```
+
+## Cheats tab
+The menu's "Trucos" tab refills life and magic, bombs and arrows, rupees or
+gives a small key (inside dungeons), and toggles infinite life (hits and pits
+don't take hearts), infinite magic, infinite bombs and arrows, and walking
+through walls. Cheats are never saved: they're all off at every start.
+
+## MSU tracks as OGG, FLAC, MP3 or WAV
+When `N.pcm` (or `N.opuz`) isn't there, the game looks for `N.ogg`, `N.flac`,
+`N.mp3` and `N.wav` with the same MSUPath, decoded with stb_vorbis and
+dr_flac / dr_mp3 / dr_wav (public domain) and resampled to `AudioFreq`. The
+loop point comes from the `LOOPSTART` (and `LOOPEND` / `LOOPLENGTH`) tags of
+OGG and FLAC files or the `smpl` chunk of WAV files; without one, looping
+tracks start over. Resuming the music position works as with PCM. A PCM pack
+converted to OGG is about a tenth of the size.
 
 ## Display mode and menu buttons
 The options menu chooses window / borderless window / fullscreen and the
@@ -117,7 +142,8 @@ launcher (MIT), reimplemented natively. All of them are in the in-game Options t
 - **Edge effect**: in widescreen, the black side bars outside the current room or
   area are filled with a blurred, darkened mirror of the scene.
 - **Rumble**: the gamepad vibrates on sword swings and hits, damage taken, items,
-  bombs, chests, pits, ledges, deep water, mirror warps and defeated bosses.
+  bombs, chests, pits, ledges, deep water, mirror warps, defeated bosses and
+  the Pegasus Boots (revving up, the dash, each step and running into a wall).
 - **Fast dialog**: hold A to type text at double speed; B writes the rest of the
   box at once (without also advancing it).
 - **Widescreen HUD**: magic, item and counters at the left edge, life meter

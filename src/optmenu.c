@@ -30,6 +30,7 @@ enum {
   kT_Toggle,
   kT_Shader,
   kT_Choice,
+  kT_Action,  // A does something once (cheats)
 };
 
 enum {
@@ -60,6 +61,15 @@ enum {
   kO_TurboSpeed,
   kO_SaveHold,
   kO_TransitionSpeed,
+  kO_DialogSpeed,
+  kO_CheatRefill,
+  kO_CheatAmmo,
+  kO_CheatRupees,
+  kO_CheatKey,
+  kO_CheatHealth,
+  kO_CheatMagic,
+  kO_CheatInfAmmo,
+  kO_CheatWalls,
   kO_Feature,  // + index in kFeatureDefs
 };
 
@@ -138,7 +148,22 @@ static const OptDef kOptions[] = {
   { kT_Toggle, kO_Feature + 11, "Cancelar viaje del pájaro", "Permite cancelar el viaje en el pájaro con X." },
   { kT_Toggle, kO_Feature + 12, "Arreglos de bugs", "Corrige varios bugs del juego original." },
   { kT_Toggle, kO_Feature + 13, "Arreglos que cambian el juego", "Corrige bugs que cambian cómo se juega (por ejemplo, algunos trucos dejan de funcionar)." },
-  { kT_Toggle, kO_Feature + 14, "Diálogos rápidos", "Mantené A para que el texto vaya al doble de velocidad; B escribe el resto del cuadro de una." },
+  { kT_Header, 0, "Diálogos", NULL },
+  { kT_Choice, kO_DialogSpeed, "Velocidad del texto", "Qué tan rápido se escriben los diálogos. Instantánea muestra cada página completa de una." },
+  { kT_Toggle, kO_Feature + 14, "Acelerar con A y B", "Mantené A para que el texto vaya el doble de rápido; B escribe el resto del cuadro de una." },
+};
+
+static const OptDef kCheats[] = {
+  { kT_Header, 0, "Al instante", NULL },
+  { kT_Action, kO_CheatRefill, "Llenar vida y magia", "Rellena todos los corazones y la magia." },
+  { kT_Action, kO_CheatAmmo, "Bombas y flechas al máximo", "Llena las bombas y las flechas hasta lo que podés llevar." },
+  { kT_Action, kO_CheatRupees, "Rupias al máximo", "Llena la billetera (999, o 9999 con la opción de más rupias)." },
+  { kT_Action, kO_CheatKey, "Una llave más", "Suma una llave pequeña. Solo dentro de un dungeon." },
+  { kT_Header, 0, "Mientras estén activados", NULL },
+  { kT_Toggle, kO_CheatHealth, "Vida infinita", "Los golpes y las caídas no te sacan vida (igual te empujan)." },
+  { kT_Toggle, kO_CheatMagic, "Magia infinita", "La magia no se gasta: capa, varas y bastones sin límite." },
+  { kT_Toggle, kO_CheatInfAmmo, "Bombas y flechas infinitas", "Las bombas y las flechas se rellenan solas." },
+  { kT_Toggle, kO_CheatWalls, "Atravesar paredes", "Link camina a través de paredes y objetos. Cuidado con quedar encerrado." },
 };
 
 typedef struct CtlDef {
@@ -204,7 +229,7 @@ enum {
 };
 
 static struct {
-  int sel[2], scroll[2];
+  int sel[kOptPage_Count], scroll[kOptPage_Count];
   int col;  // controls page: 0 = keyboard, 1 = gamepad
 
   // Shader picker: 0 = closed, 1 = folders, 2 = files of a folder
@@ -320,6 +345,11 @@ static int GetValue(int id) {
   case kO_TurboSpeed: return g_config.turbo_speed < 2 ? 1 : g_config.turbo_speed;
   case kO_SaveHold: return g_config.save_hold_ms;
   case kO_TransitionSpeed: return g_config.transition_speed;
+  case kO_DialogSpeed: return g_config.dialog_speed;
+  case kO_CheatHealth: return (g_cheats & kCheat_Health) != 0;
+  case kO_CheatMagic: return (g_cheats & kCheat_Magic) != 0;
+  case kO_CheatInfAmmo: return (g_cheats & kCheat_Ammo) != 0;
+  case kO_CheatWalls: return ZeldaCheatWallsOn();
   case kO_Aspect: return CurrentAspect();
   default:
     if (id >= kO_Feature && id < kO_Feature + countof(kFeatureDefs))
@@ -374,6 +404,11 @@ static void FormatValue(int id, char *buf, size_t n) {
     else if (v == 1) snprintf(buf, n, "Normales");
     else snprintf(buf, n, "x%d más rápidas", v);
     break;
+  case kO_DialogSpeed:
+    if (v == 0) snprintf(buf, n, "Instantánea");
+    else if (v == 1) snprintf(buf, n, "Normal");
+    else snprintf(buf, n, "x%d más rápida", v);
+    break;
   case kO_SaveHold:
     if (v <= 0) snprintf(buf, n, "Al instante");
     else if (v % 1000 == 0) snprintf(buf, n, "%d s", v / 1000);
@@ -411,11 +446,50 @@ static void SetRenderFlag(int flag, bool on, bool *cfg, const char *ini) {
   Main_SetRenderFlags(on ? (f | flag) : (f & ~flag));
 }
 
+static const char *CheatLabel(int id) {
+  for (int i = 0; i < countof(kCheats); i++)
+    if (kCheats[i].id == id)
+      return kCheats[i].label;
+  return "";
+}
+
+static void ChangeCheat(int id) {
+  static const struct { uint8 id, action; } kActions[] = {
+    { kO_CheatRefill, kCheatAction_Refill }, { kO_CheatAmmo, kCheatAction_Ammo },
+    { kO_CheatRupees, kCheatAction_Rupees }, { kO_CheatKey, kCheatAction_Key },
+    { kO_CheatWalls, kCheatAction_Walls },
+  };
+  if (!ZeldaIsPlaying()) {
+    SetMsg("Los trucos se usan durante la partida%s", NULL);
+    return;
+  }
+  for (int i = 0; i < countof(kActions); i++) {
+    if (kActions[i].id == id) {
+      if (!ZeldaCheatAction(kActions[i].action))
+        SetMsg(id == kO_CheatKey ? "Las llaves solo sirven dentro de un dungeon%s" : "Ahora no se puede usar%s", NULL);
+      else if (id == kO_CheatWalls)
+        SetMsg(ZeldaCheatWallsOn() ? "Activado: %s" : "Desactivado: %s", CheatLabel(id));
+      else
+        SetMsg("Listo: %s", CheatLabel(id));
+      return;
+    }
+  }
+  int bit = id == kO_CheatHealth ? kCheat_Health : id == kO_CheatMagic ? kCheat_Magic : kCheat_Ammo;
+  g_cheats ^= bit;
+  if ((g_cheats & bit) && bit == kCheat_Health)
+    ZeldaCheatAction(kCheatAction_Refill);
+  SetMsg((g_cheats & bit) ? "Activado: %s" : "Desactivado: %s", CheatLabel(id));
+}
+
 static void ChangeOption(int id, int dir) {
   int type = 0;
   for (int i = 0; i < countof(kOptions); i++)
     if (kOptions[i].id == id)
       type = kOptions[i].type;
+  if (id >= kO_CheatRefill && id <= kO_CheatWalls) {
+    ChangeCheat(id);
+    return;
+  }
 
   if (type == kT_Slider) {
     int lo, hi, step;
@@ -501,6 +575,18 @@ static void ChangeOption(int id, int dir) {
     pos = (pos + dir + 5) % 5;
     g_config.transition_speed = kOrder[pos];
     SaveInt("General", "TransitionSpeed", g_config.transition_speed);
+    return;
+  }
+  if (type == kT_Choice && id == kO_DialogSpeed) {
+    // Normal -> x2 -> x3 -> x4 -> instant
+    static const int8 kOrder[5] = { 1, 2, 3, 4, 0 };
+    int pos = 0;
+    for (int i = 0; i < 5; i++)
+      if (kOrder[i] == g_config.dialog_speed) pos = i;
+    if (dir == 0) dir = 1;
+    pos = (pos + dir + 5) % 5;
+    g_config.dialog_speed = kOrder[pos];
+    SaveInt("General", "DialogSpeed", g_config.dialog_speed);
     return;
   }
   if (type == kT_Choice && id == kO_MenuButtons) {
@@ -882,12 +968,23 @@ void OptMenu_Open() {
   g_om.msg_until = 0;
 }
 
+static const OptDef *PageDefs(int page, int *n) {
+  if (page == kOptPage_Cheats) {
+    *n = countof(kCheats);
+    return kCheats;
+  }
+  *n = countof(kOptions);
+  return kOptions;
+}
+
 static int NumRows(int page) {
-  return page == kOptPage_Options ? countof(kOptions) : countof(kControls);
+  int n;
+  return page == kOptPage_Controls ? countof(kControls) : (PageDefs(page, &n), n);
 }
 
 static bool IsHeader(int page, int i) {
-  return page == kOptPage_Options ? kOptions[i].type == kT_Header : kControls[i].header;
+  int n;
+  return page == kOptPage_Controls ? kControls[i].header : PageDefs(page, &n)[i].type == kT_Header;
 }
 
 static void MoveSel(int page, int dir) {
@@ -956,7 +1053,12 @@ bool OptMenu_Input(int page, int action) {
   case kSaveMenu_Back: return false;
   }
 
-  if (page == kOptPage_Options) {
+  if (page == kOptPage_Cheats) {
+    int n;
+    const OptDef *o = &PageDefs(page, &n)[i];
+    if (action == kSaveMenu_Ok || (o->type == kT_Toggle && (action == kSaveMenu_Left || action == kSaveMenu_Right)))
+      ChangeOption(o->id, 0);
+  } else if (page == kOptPage_Options) {
     const OptDef *o = &kOptions[i];
     if (action == kSaveMenu_Left || action == kSaveMenu_Right) {
       if (o->type == kT_Shader)
@@ -1131,34 +1233,39 @@ static void DrawPicker(Canvas *c, int x, int w, int top, int bottom) {
       "A: aplicar este shader (se ve al instante). B: volver a las carpetas.");
 }
 
-static void DrawOptions(Canvas *c, int x, int w, int top, int bottom) {
-  if (g_om.picker) {
+static void DrawOptions(Canvas *c, int page, int x, int w, int top, int bottom) {
+  if (page == kOptPage_Options && g_om.picker) {
     DrawPicker(c, x, w, top, bottom);
     return;
   }
-  if (IsHeader(kOptPage_Options, g_om.sel[0]))
-    MoveSel(kOptPage_Options, 1);
+  if (IsHeader(page, g_om.sel[page]))
+    MoveSel(page, 1);
   int help_y = bottom - 28;
   int rows = (help_y - 4 - top) / kRowH;
-  int n = countof(kOptions);
-  FixScroll(&g_om.scroll[0], g_om.sel[0], rows, n);
+  int n;
+  const OptDef *defs = PageDefs(page, &n);
+  int *sel_p = &g_om.sel[page], *scroll_p = &g_om.scroll[page];
+  FixScroll(scroll_p, *sel_p, rows, n);
   int value_w = w * 4 / 10;
   if (value_w > 150) value_w = 150;
   int vx = x + w - value_w;
   char buf[128];
 
-  for (int r = 0; r < rows && g_om.scroll[0] + r < n; r++) {
-    int i = g_om.scroll[0] + r, y = top + r * kRowH;
-    const OptDef *o = &kOptions[i];
+  for (int r = 0; r < rows && *scroll_p + r < n; r++) {
+    int i = *scroll_p + r, y = top + r * kRowH;
+    const OptDef *o = &defs[i];
     if (o->type == kT_Header) {
       DrawHeaderRow(c, x, y + 1, w, o->label);
       continue;
     }
-    bool sel = i == g_om.sel[0];
+    bool sel = i == *sel_p;
     DrawRowBg(c, x, y, w, kRowH - 1, sel);
     DrawText(c, x + 5, y, o->label, sel ? kCol_Gold : kCol_White, vx - x - 10);
 
-    if (o->type == kT_Shader) {
+    if (o->type == kT_Action) {
+      if (sel)
+        DrawText(c, vx + 8, y, "Usar", kCol_Gold, -1);
+    } else if (o->type == kT_Shader) {
       ShaderDisplayName(g_config.shader, buf, sizeof(buf));
       if (!IsOpenGL())
         snprintf(buf, sizeof(buf), "Requiere OpenGL");
@@ -1197,8 +1304,8 @@ static void DrawOptions(Canvas *c, int x, int w, int top, int bottom) {
       DrawText(c, bx + 25, y, on ? "Sí" : "No", on ? kCol_White : kCol_Gray, -1);
     }
   }
-  DrawScrollMarks(c, x + w / 2, top - 1, top + rows * kRowH, g_om.scroll[0] > 0, g_om.scroll[0] + rows < n);
-  DrawHelp(c, x, help_y, w, kOptions[g_om.sel[0]].help);
+  DrawScrollMarks(c, x + w / 2, top - 1, top + rows * kRowH, *scroll_p > 0, *scroll_p + rows < n);
+  DrawHelp(c, x, help_y, w, defs[*sel_p].help);
 }
 
 static void DrawControls(Canvas *c, int x, int w, int top, int bottom) {
@@ -1271,10 +1378,10 @@ static void DrawControls(Canvas *c, int x, int w, int top, int bottom) {
 
 void OptMenu_Draw(int page, Canvas *c, int top, int bottom) {
   int x = 10, w = c->w - 20;
-  if (page == kOptPage_Options)
-    DrawOptions(c, x, w, top, bottom);
-  else
+  if (page == kOptPage_Controls)
     DrawControls(c, x, w, top, bottom);
+  else
+    DrawOptions(c, page, x, w, top, bottom);
 }
 
 const char *OptMenu_Hint(int page, bool wide) {
@@ -1283,5 +1390,7 @@ const char *OptMenu_Hint(int page, bool wide) {
     return "B:Volver|A:Elegir";
   if (page == kOptPage_Options)
     return "LR:Pestaña|DPAD:Cambiar|B:Cerrar|A:Elegir";
+  if (page == kOptPage_Cheats)
+    return "LR:Pestaña|B:Cerrar|A:Usar";
   return "LR:Pestaña|X:Borrar|B:Cerrar|A:Asignar";
 }

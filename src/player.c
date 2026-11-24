@@ -165,7 +165,8 @@ void Link_ControlHandler() {  // 87807f
         Ancilla_Sfx2_Near(38);
         Haptic_Event(kHaptic_DamageTaken, dmg);
         number_of_times_hurt_by_sprites++;
-        uint8 new_dmg = link_health_current - dmg;
+        // Cheat: infinite health (still knocked back)
+        uint8 new_dmg = (g_cheats & kCheat_Health) ? link_health_current : link_health_current - dmg;
         if (new_dmg == 0 || new_dmg >= 0xa8) {
           mapbak_TM = TM_copy;
           mapbak_TS = TS_copy;
@@ -1188,8 +1189,11 @@ void LinkState_Dashing() {  // 878f86
   uint8 a = link_countdown_for_dash;
   if (a == 0)
     a = index_of_dashing_sfx--;
-  if (!(kDashTab1[link_countdown_for_dash >> 4] & a))
+  if (!(kDashTab1[link_countdown_for_dash >> 4] & a)) {
     Ancilla_Sfx2_Near(35);
+    if (!link_countdown_for_dash)
+      Haptic_Event(kHaptic_Boots, kHapticBoots_Step);
+  }
   if (sign8(--link_countdown_for_dash)) {
     link_countdown_for_dash = 0;
     if (follower_indicator == kTagalongArr1[follower_indicator])
@@ -1207,6 +1211,8 @@ void LinkState_Dashing() {  // 878f86
       return;
     }
     AncillaAdd_DashDust_charging(30, 0);
+    if ((link_countdown_for_dash & 3) == 0)
+      Haptic_Event(kHaptic_Boots, kHapticBoots_Charge);
     link_x_vel = link_y_vel = 0;
     link_dash_ctr = 64;
     link_speed_setting = 16;
@@ -1235,6 +1241,8 @@ void LinkState_Dashing() {  // 878f86
   if (link_animation_steps >= 6)
     link_animation_steps = 0;
 
+  if (link_dash_ctr == 64)
+    Haptic_Event(kHaptic_Boots, kHapticBoots_Launch);
   link_dash_ctr--;
   if (link_dash_ctr < 32)
     link_dash_ctr = 32;
@@ -1331,6 +1339,7 @@ void RepelDash() {  // 8791f1
     Link_ResetSwimmingState();
     AncillaAdd_DashTremor(29, 1);
     Prepare_ApplyRumbleToSprites();
+    Haptic_Event(kHaptic_Boots, kHapticBoots_Bonk);
     if ((sound_effect_2 & 0x3f) != 27 && (sound_effect_2 & 0x3f) != 50)
       Ancilla_Sfx3_Near(3);
     LinkApplyTileRebound();
@@ -1571,7 +1580,8 @@ void HandleLayerOfDestination() {  // 8794f1
 
 void DungeonPitDoDamage() {  // 879502
   submodule_index = 20;
-  link_health_current -= 8;
+  if (!(g_cheats & kCheat_Health))
+    link_health_current -= 8;
   if (link_health_current >= 0xa8)
     link_health_current = 0;
 }

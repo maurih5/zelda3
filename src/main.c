@@ -30,6 +30,8 @@
 #include "savemenu.h"
 #include "optmenu.h"
 #include "haptics.h"
+#include "messaging.h"
+#include "misc.h"
 #include "edgefx.h"
 
 static bool g_run_without_emu = 0;
@@ -146,6 +148,7 @@ static void SwitchDirectory();
 static bool SkipFrameForTransition();
 #ifdef SAVEMENU_SELFTEST
 static int g_st_trans_frames, g_st_trans_shown;
+static int g_st_msg_frame = -1;
 #endif
 
 enum {
@@ -758,11 +761,15 @@ int main(int argc, char** argv) {
         //   kill@N          set Link's health to 0
         //   dump:NAME@N     save the drawn frame N to NAME.bmp
         //   end@N           quit
+        //   msg:ID@N        show text message ID (reports when it's fully typed)
+        //   hurt:D@N        give D (1/8 hearts) of damage
+        //   cheat:NAME@N    refill / ammo / rupees / key / walls, or health / magic / infammo (toggles)
+        //   ram@N           print health, magic, items
         static const char *const kBtn[12] = { "B", "Y", "Select", "Start", "Up", "Down", "Left", "Right", "A", "X", "L", "R" };
         char spec[1024];
         snprintf(spec, sizeof(spec), "%s", getenv("ZELDA3_SELFTEST_SCRIPT"));
         if (f == 0)
-          g_config.disable_frame_delay = true;
+          g_config.disable_frame_delay = !getenv("ZELDA3_SELFTEST_REALTIME");
         inputs = 0;
         for (char *tok = strtok(spec, ";"); tok; tok = strtok(NULL, ";")) {
           int a = -1, b = -1;
@@ -785,11 +792,61 @@ int main(int argc, char** argv) {
           } else if (sscanf(tok, "dump:%40[^@]@%d", name, &a) == 2 && f == a) {
             snprintf(g_st_dump_name, sizeof(g_st_dump_name), "%s.bmp", name);
             g_st_dump_frame = 1;
+          } else if (sscanf(tok, "msg:%d@%d", &b, &a) == 2 && f == a) {
+            dialogue_message_index = b;
+            Main_ShowTextMessage();
+            g_st_msg_frame = f;
+          } else if (sscanf(tok, "tab:%d@%d", &b, &a) == 2 && f == a) {
+            // Menu tokens: the game is paused while the menu is open, so open,
+            // use, dump (menudump) and close (menuclose) it within one frame.
+            SaveMenu_OpenTab(b);
+          } else if (sscanf(tok, "menudump:%40[^@]@%d", name, &a) == 2 && f == a) {
+            char fn[64];
+            snprintf(fn, sizeof(fn), "%s.bmp", name);
+            SelftestDumpMenu(fn);
+          } else if (sscanf(tok, "menuclose@%d", &a) == 1 && f == a) {
+            if (SaveMenu_IsOpen()) SaveMenu_Toggle();
+          } else if (sscanf(tok, "menu:%40[^@]@%d", name, &a) == 2 && f == a) {
+            static const char *const kActs[] = { "Up", "Down", "PageUp", "PageDown", "Ok", "Back", "Left", "Right" };
+            for (int i = 0; i < 8; i++)
+              if (strcmp(name, kActs[i]) == 0) SaveMenu_Input(kSaveMenu_Up + i);
+          } else if (sscanf(tok, "hurt:%d@%d", &b, &a) == 2 && f == a) {
+            link_give_damage = b;
+          } else if (sscanf(tok, "cheat:%40[^@]@%d", name, &a) == 2 && f == a) {
+            static const char *const kActs[5] = { "refill", "ammo", "rupees", "key", "walls" };
+            bool ok = true;
+            for (int i = 0; i < 5; i++)
+              if (strcmp(name, kActs[i]) == 0) ok = ZeldaCheatAction(i);
+            if (strcmp(name, "health") == 0) g_cheats ^= kCheat_Health;
+            if (strcmp(name, "magic") == 0) g_cheats ^= kCheat_Magic;
+            if (strcmp(name, "infammo") == 0) g_cheats ^= kCheat_Ammo;
+            printf("SCRIPT cheat %s at %d: %s\n", name, f, ok ? "ok" : "not available");
+          } else if (sscanf(tok, "ram@%d", &a) == 1 && f == a) {
+            printf("SCRIPT ram at %d: module=%d health=%d/%d magic=%d bombs=%d arrows=%d rupees=%d keys=%d walls=%d boots=%d\n",
+                   f, main_module_index, link_health_current, link_health_capacity, link_magic_power, link_item_bombs,
+                   link_num_arrows, link_rupees_goal, link_num_keys, g_ram[0x37f], link_item_boots);
           } else if (sscanf(tok, "end@%d", &a) == 1 && f >= a) {
+            extern int g_st_haptic_boots[4];
+            printf("SCRIPT boots rumble: charge=%d launch=%d step=%d bonk=%d\n", g_st_haptic_boots[0],
+                   g_st_haptic_boots[1], g_st_haptic_boots[2], g_st_haptic_boots[3]);
             printf("SCRIPT transitions: %d frames, %d shown\n", g_st_trans_frames, g_st_trans_shown);
             printf("SCRIPT end at %d (module %d)\n", f, main_module_index);
             fflush(stdout);
             exit(0);
+          }
+        }
+        // While a msg: is shown, report each page and press A to go on.
+        if (g_st_msg_frame >= 0 && f > g_st_msg_frame + 1) {
+          static bool was_waiting;
+          bool w = Text_IsWaitingForPlayer();
+          if (w && !was_waiting)
+            printf("SCRIPT text page ready at +%d\n", f - g_st_msg_frame);
+          was_waiting = w;
+          if (w && (f & 1))
+            inputs |= 1 << 8;  // A
+          if (main_module_index != 14) {
+            printf("SCRIPT text closed after %d frames\n", f - g_st_msg_frame);
+            g_st_msg_frame = -1;
           }
         }
         g_st_frame++;
@@ -1121,6 +1178,7 @@ SELFTEST_SCRIPT_DONE:;
         ZeldaRewindFinish();
         g_rewinding = false;
       }
+      ZeldaApplyCheats();
       is_replay = ZeldaRunFrame(inputs);
 #ifdef REWIND_SELFTEST
       double st_t1 = StNow();

@@ -13,6 +13,7 @@
 #include "util.h"
 #include "audio.h"
 #include "assets.h"
+#include "features.h"
 ZeldaEnv g_zenv;
 uint8 g_ram[131072];
 
@@ -1298,6 +1299,66 @@ void PatchCommand(char c) {
   StateRecoderMultiPatch_Commit(&mp);
 }
 
+
+// Cheats from the "Trucos" tab of the menu. They're not saved anywhere: they
+// stay on until turned off or the game is closed.
+uint8 g_cheats;
+
+bool ZeldaIsPlaying() {
+  return main_module_index == 7 || main_module_index == 9 || main_module_index == 14;
+}
+
+// Called before every game frame.
+void ZeldaApplyCheats() {
+  if (!g_cheats || (main_module_index != 7 && main_module_index != 9))
+    return;
+  if (g_cheats & kCheat_Magic)
+    link_magic_power = 0x80;
+  if (g_cheats & kCheat_Ammo) {
+    if (link_item_bombs < kMaxBombsForLevel[link_bomb_upgrades & 7] && !link_bomb_filler)
+      link_bomb_filler = 70;
+    if (link_num_arrows < kMaxArrowsForLevel[link_arrow_upgrades & 7] && !link_arrow_filler)
+      link_arrow_filler = 70;
+  }
+}
+
+bool ZeldaCheatAction(int action) {
+  if (!ZeldaIsPlaying())
+    return false;
+  // Keys only count inside dungeons (0xff hides the counter outside).
+  if (action == kCheatAction_Key && ((uint8)cur_palace_index_x2 == 0xff || link_num_keys == 0xff))
+    return false;
+  StateRecoderMultiPatch mp;
+  StateRecoderMultiPatch_Init(&mp);
+  switch (action) {
+  case kCheatAction_Refill:
+    StateRecoderMultiPatch_Patch(&mp, 0xf372, 0xa0);  // health filler
+    StateRecoderMultiPatch_Patch(&mp, 0xf373, 0x80);  // magic filler
+    break;
+  case kCheatAction_Ammo:
+    StateRecoderMultiPatch_Patch(&mp, 0xf375, 70);  // link_bomb_filler
+    StateRecoderMultiPatch_Patch(&mp, 0xf376, 70);  // link_arrow_filler
+    break;
+  case kCheatAction_Rupees: {
+    uint16 rupees = enhanced_features0 & kFeatures0_CarryMoreRupees ? 9999 : 999;
+    StateRecoderMultiPatch_Patch(&mp, 0xf360, rupees);  // link_rupees_goal
+    StateRecoderMultiPatch_Patch(&mp, 0xf361, rupees >> 8);
+    break;
+  }
+  case kCheatAction_Key:
+    StateRecoderMultiPatch_Patch(&mp, 0xf36f, link_num_keys >= 9 ? 9 : link_num_keys + 1);
+    break;
+  case kCheatAction_Walls:
+    StateRecoderMultiPatch_Patch(&mp, 0x37f, g_ram[0x37f] ^ 1);
+    break;
+  }
+  StateRecoderMultiPatch_Commit(&mp);
+  return true;
+}
+
+bool ZeldaCheatWallsOn() {
+  return g_ram[0x37f] & 1;
+}
 
 void ZeldaReadSram() {
   FILE *f = fopen("saves/sram.dat", "rb");

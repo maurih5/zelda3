@@ -7,6 +7,7 @@
 #include "third_party/opus-1.3.1-stripped/opus.h"
 #include "config.h"
 #include "assets.h"
+#include "msu_formats.h"
 
 // This needs to hold a lot more things than with just PCM
 typedef struct MsuPlayerResumeInfo {
@@ -38,6 +39,7 @@ typedef struct MsuPlayer {
   float volume, volume_step, volume_target;
   uint16 range_cur, range_repeat;
   OpusDecoder *opus;
+  MsuDecoder *dec;  // OGG / FLAC / MP3 / WAV tracks
   int16 buffer[960 * 2];
 } MsuPlayer;
 
@@ -162,6 +164,8 @@ static void MsuPlayer_CloseFile(MsuPlayer *mp) {
     fclose(mp->f);
   opus_decoder_destroy(mp->opus);
   mp->opus = NULL;
+  MsuDecoder_Close(mp->dec);
+  mp->dec = NULL;
   mp->f = NULL;
   if (mp->state != kMsuState_FinishedPlaying)
     mp->state = kMsuState_Idle;
@@ -194,10 +198,36 @@ static void MsuPlayer_Open(MsuPlayer *mp, int orig_track, bool resume_from_snaps
     return;
   char fname[256], buf[8];
   snprintf(fname, sizeof(fname), "%s%d.%s", g_config.msu_path ? g_config.msu_path : "", actual_track, mp->enabled & kMsuEnabled_Opuz ? "opuz" : "pcm");
-  printf("Loading MSU %s\n", fname);
   mp->f = fopen(fname, "rb");
-  if (mp->f == NULL)
-    goto READ_ERROR;
+  if (mp->f == NULL) {
+    // Not in the native format: try regular audio files.
+    for (int i = 0; kMsuDecoderExts[i] && !mp->dec; i++) {
+      snprintf(fname, sizeof(fname), "%s%d.%s", g_config.msu_path ? g_config.msu_path : "", actual_track, kMsuDecoderExts[i]);
+      mp->dec = MsuDecoder_Open(fname, g_config.audio_freq);
+    }
+    if (!mp->dec) {
+      snprintf(fname, sizeof(fname), "%s%d.%s", g_config.msu_path ? g_config.msu_path : "", actual_track, mp->enabled & kMsuEnabled_Opuz ? "opuz" : "pcm");
+      goto READ_ERROR;
+    }
+    printf("Loading MSU %s\n", fname);
+    uint32 tag = MsuDecoder_Tag(mp->dec);
+    uint64 fingerprint = MsuDecoder_Fingerprint(mp->dec);
+    if (resume.actual_track == actual_track && resume.tag == tag && resume.initial_packet_bytes == fingerprint &&
+        MsuDecoder_Seek(mp->dec, resume.offset)) {
+      memcpy(&mp->resume_info, &resume, sizeof(mp->resume_info));
+    } else {
+      mp->resume_info.orig_track = orig_track;
+      mp->resume_info.actual_track = actual_track;
+      mp->resume_info.tag = tag;
+      mp->resume_info.initial_packet_bytes = fingerprint;
+      mp->resume_info.offset = 0;
+    }
+    mp->state = kMsuState_Playing;
+    mp->buffer_size = mp->buffer_pos = 0;
+    mp->preskip = 0;
+    return;
+  }
+  printf("Loading MSU %s\n", fname);
   setvbuf(mp->f, NULL, _IOFBF, 16384);
   if (fread(buf, 1, 8, mp->f) != 8) READ_ERROR: {
     fprintf(stderr, "Unable to read MSU file %s\n", fname);
@@ -301,7 +331,16 @@ void MsuPlayer_Mix(MsuPlayer *mp, int16 *audio_buffer, int audio_samples) {
   int r;
 
   do {
-    if (mp->buffer_size - mp->buffer_pos == 0) {
+    if (mp->buffer_size - mp->buffer_pos == 0 && mp->dec) {
+      uint8 t = mp->resume_info.actual_track;
+      bool repeat = !(t < sizeof(kMsuTracksWithRepeat) && !kMsuTracksWithRepeat[t]);
+      mp->resume_info.offset = (uint32)MsuDecoder_Tell(mp->dec);
+      r = MsuDecoder_Read(mp->dec, mp->buffer, 960, repeat);
+      if (r == 0)
+        goto FINISHED_PLAYING;
+      mp->buffer_pos = 0;
+      mp->buffer_size = r;
+    } else if (mp->buffer_size - mp->buffer_pos == 0) {
       if (mp->opus != NULL) {
         if (mp->samples_until_repeat == 0) {
           if (mp->range_cur == 0) FINISHED_PLAYING: {
@@ -472,8 +511,17 @@ void ZeldaRenderAudio(int16 *audio_buffer, int samples, int channels) {
     for (int i = 0, n = samples * channels; i < n; i++)
       audio_buffer[i] = (int16)(audio_buffer[i] * g_spc_gain >> 16);
   }
-  if (g_msu_player.f && channels == 2)
+  if ((g_msu_player.f || g_msu_player.dec) && channels == 2)
     MsuPlayer_Mix(&g_msu_player, audio_buffer, samples);
+#ifdef SAVEMENU_SELFTEST
+  {
+    static FILE *dump_f;
+    if (!dump_f && getenv("ZELDA3_SELFTEST_AUDIODUMP"))
+      dump_f = fopen(getenv("ZELDA3_SELFTEST_AUDIODUMP"), "wb");
+    if (dump_f)
+      fwrite(audio_buffer, 2 * channels, samples, dump_f), fflush(dump_f);
+  }
+#endif
   ZeldaApuUnlock();
 }
 

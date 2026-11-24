@@ -10,7 +10,10 @@ typedef struct HapticPattern {
 } HapticPattern;
 
 static int g_haptic_intensity = 70;
-static uint32 g_haptic_last[8];
+#ifdef SAVEMENU_SELFTEST
+int g_st_haptic_boots[4];
+#endif
+static uint32 g_haptic_last[16];
 
 void Haptics_Configure(int intensity) {
   g_haptic_intensity = intensity < 0 ? 0 : intensity > 100 ? 100 : intensity;
@@ -38,6 +41,18 @@ static bool PatternFor(int type, int arg, HapticPattern *p) {
   case kHaptic_DamageTaken: *p = arg >= 40 ? kDamageHigh : arg >= 24 ? kDamageMed : kDamageLow; return true;
   case kHaptic_HookshotWall: *p = kHookshotWall; return true;
   case kHaptic_BoomerangCatch: *p = kBoomerang; return true;
+  case kHaptic_Boots: {
+    static const HapticPattern kBoots[4] = {
+      { 22, 45, 0 },     // charge
+      { 60, 140, 0 },    // launch
+      { 14, 40, 0 },     // running steps
+      { 90, 220, 300 },  // bonk
+    };
+    if ((unsigned)arg >= 4)
+      return false;
+    *p = kBoots[arg];
+    return true;
+  }
   case kHaptic_Environment:
     if (arg < 0 || arg >= 8) return false;
     *p = kEnv[arg];
@@ -66,8 +81,12 @@ void Haptic_Event(int type, int arg) {
   HapticPattern p;
   if (!PatternFor(type, arg, &p))
     return;
+#ifdef SAVEMENU_SELFTEST
+  if (type == kHaptic_Boots)
+    g_st_haptic_boots[arg]++;
+#endif
   uint32 now = SDL_GetTicks();
-  if (type >= 0 && type < 8) {
+  if (type >= 0 && type < 16) {
     if (p.cooldown_ms && g_haptic_last[type] && now - g_haptic_last[type] < p.cooldown_ms)
       return;
     g_haptic_last[type] = now ? now : 1;

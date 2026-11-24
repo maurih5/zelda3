@@ -16,6 +16,7 @@
 #include "attract.h"
 #include "nmi.h"
 #include "assets.h"
+#include "config.h"
 
 static void WorldMap_AddSprite(int spr, uint8 big, uint8 flags, uint8 ch, uint16 x, uint16 y);
 static bool WorldMap_CalculateOamCoordinates(Point16U *pt);
@@ -2127,16 +2128,22 @@ void RenderText() {  // 8ec440
   // text engine twice per frame, and B writes the rest of the box at once
   // (that press doesn't also advance it). The engine is stepped more than once
   // per frame but stops at every key wait, so nothing is skipped.
-  if (!(enhanced_features0 & kFeatures0_FastDialog) || main_module_index != 14 || messaging_module != 1) {
+  // DialogSpeed (1 = normal, 2-4 = that many times faster, 0 = a whole page
+  // at once) works the same way, without holding anything.
+  bool fast_keys = (enhanced_features0 & kFeatures0_FastDialog) != 0;
+  int speed = g_config.dialog_speed;
+  if ((!fast_keys && speed == 1) || main_module_index != 14 || messaging_module != 1) {
     kMessaging_Text[messaging_module]();
     return;
   }
-  if (text_render_state == 3 && (filtered_joypad_H & 0x80) && !Text_AtKeyWait()) {
+  if (fast_keys && text_render_state == 3 && (filtered_joypad_H & 0x80) && !Text_AtKeyWait()) {
     g_text_fill = true;
     filtered_joypad_H &= ~0xc0;
     filtered_joypad_L &= ~0xc0;
   }
-  int steps = g_text_fill ? 240 : (joypad1L_last & 0x80) ? 2 : 1;
+  int steps = (g_text_fill || speed == 0) ? 240 : speed;
+  if (fast_keys && (joypad1L_last & 0x80) && steps < 240)
+    steps *= 2;
   while (steps-- > 0) {
     uint8 state_before = text_render_state;
     kMessaging_Text[messaging_module]();
@@ -2146,6 +2153,13 @@ void RenderText() {  // 8ec440
     // would overwrite it before it's shown.
     if (state_before <= 1 && nmi_load_bg_from_vram)
       break;
+  }
+  // Faster text also shortens the pause before the next page can be called up
+  // (28 frames), but not to nothing, so mashing doesn't skip unread pages.
+  if (speed != 1 && main_module_index == 14 && messaging_module == 1 && Text_AtKeyWait()) {
+    int extra = speed == 0 ? 2 : speed - 1;  // 28 frames -> 14 (x2), 10 (x3, instant), 7 (x4)
+    text_wait_countdown2 = text_wait_countdown2 > 2 + extra ? text_wait_countdown2 - extra :
+                           text_wait_countdown2 > 2 ? 2 : text_wait_countdown2;
   }
   if (g_text_fill && (main_module_index != 14 || messaging_module != 1 || Text_AtKeyWait()))
     g_text_fill = false;

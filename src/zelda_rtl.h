@@ -91,6 +91,26 @@ bool ZeldaSaveStateFile(const char *path);
 bool ZeldaLoadStateFile(const char *path, bool keep_sram);
 bool ZeldaIsReplaying();
 
+// Cheats ("Trucos" tab of the menu). Not saved: they're off at every start.
+enum {
+  kCheat_Health = 1,  // damage and pits don't take life
+  kCheat_Magic = 2,
+  kCheat_Ammo = 4,    // bombs and arrows refill
+};
+enum {
+  kCheatAction_Refill,
+  kCheatAction_Ammo,
+  kCheatAction_Rupees,
+  kCheatAction_Key,
+  kCheatAction_Walls,  // toggles walking through walls
+};
+extern uint8 g_cheats;
+void ZeldaApplyCheats();
+bool ZeldaIsPlaying();  // in the game world (not intro / file select / ending)
+// Returns false if it can't be used now (not playing, or a key outside a dungeon).
+bool ZeldaCheatAction(int action);
+bool ZeldaCheatWallsOn();
+
 typedef void ZeldaRunFrameFunc(uint16 input, int run_what);
 typedef void ZeldaSyncAllFunc();
 
