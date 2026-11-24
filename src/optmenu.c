@@ -1045,7 +1045,7 @@ static void ApplyShader(const char *rel) {
   char path[512] = "";
   if (rel)
     snprintf(path, sizeof(path), "%s/%s", kShaderRoot, rel);
-  char name[96];
+  char name[64];  // cabe en g_om.msg[128] junto al texto de error
   ShaderDisplayName(path, name, sizeof(name));
   if (!Main_SetShader(path)) {
     SetMsg("No se pudo cargar \"%s\" (quedó el anterior)", name);
