@@ -70,6 +70,16 @@ DiscordLocation = 1
 DiscordAppId = 1574572493212225667   # your own Discord application id
 ```
 
+## Faster screen transitions
+While scrolling between overworld areas, during mosaic area changes and when
+moving between dungeon rooms or along stairs, the game runs several frames per
+shown frame (the game logic is unchanged, only fewer frames are drawn).
+
+```ini
+[General]
+TransitionSpeed = 2   # 1 = normal, 2-4 = that many times faster, 0 = instant
+```
+
 ## Display mode and menu buttons
 The options menu chooses window / borderless window / fullscreen and the
 window size (x1-x6); both are remembered. Menus use the Nintendo button

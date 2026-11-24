@@ -143,6 +143,10 @@ static uint32 g_save_hold_start;
 static int g_save_hold_done;  // completed hold saves (for the selftest)
 static void LoadAssets();
 static void SwitchDirectory();
+static bool SkipFrameForTransition();
+#ifdef SAVEMENU_SELFTEST
+static int g_st_trans_frames, g_st_trans_shown;
+#endif
 
 enum {
   kDefaultFullscreen = 0,
@@ -782,6 +786,7 @@ int main(int argc, char** argv) {
             snprintf(g_st_dump_name, sizeof(g_st_dump_name), "%s.bmp", name);
             g_st_dump_frame = 1;
           } else if (sscanf(tok, "end@%d", &a) == 1 && f >= a) {
+            printf("SCRIPT transitions: %d frames, %d shown\n", g_st_trans_frames, g_st_trans_shown);
             printf("SCRIPT end at %d (module %d)\n", f, main_module_index);
             fflush(stdout);
             exit(0);
@@ -966,7 +971,7 @@ int main(int argc, char** argv) {
         printf("Volumen %d -> %d\n", vol0, g_config.volume);
         SelftestCheck(g_config.volume == vol0 - 20, "izquierda baja el volumen");
         SDL_LockMutex(g_audio_mutex);
-        for (int i = 0; i < 26; i++) SaveMenu_Input(kSaveMenu_Down);
+        for (int i = 0; i < 27; i++) SaveMenu_Input(kSaveMenu_Down);
         uint32 feat0 = g_config.features0;
         SaveMenu_Input(kSaveMenu_Ok);
         SDL_UnlockMutex(g_audio_mutex);
@@ -974,7 +979,7 @@ int main(int argc, char** argv) {
                       (g_wanted_zelda_features & kFeatures0_TurnWhileDashing), "A activa 'Girar al correr'");
         SelftestDumpMenu("selftest_opt2.bmp");
         SDL_LockMutex(g_audio_mutex);
-        for (int i = 0; i < 23; i++) SaveMenu_Input(kSaveMenu_Up);
+        for (int i = 0; i < 24; i++) SaveMenu_Input(kSaveMenu_Up);
         SaveMenu_Input(kSaveMenu_Ok);  // Shader (needs OpenGL)
         SDL_UnlockMutex(g_audio_mutex);
         SelftestDumpMenu("selftest_opt3.bmp");
@@ -1139,6 +1144,11 @@ SELFTEST_SCRIPT_DONE:;
     SDL_UnlockMutex(g_audio_mutex);
 
     frameCtr++;
+
+    // Faster screen transitions: run the transition frames without showing
+    // all of them (the game logic is unchanged).
+    if (!rewound && !g_turbo && !is_replay && SkipFrameForTransition())
+      continue;
 
     if (!rewound && (g_turbo ^ (is_replay & g_replay_turbo))) {
       // TurboSpeed = N shows one of every N frames at the normal pace (N times faster);
@@ -1459,6 +1469,42 @@ static bool HandleSaveMenuKeyRepeats(int key, int mod) {
   int a = SaveMenuActionForKey(key, mod);
   return a == kSaveMenu_Up || a == kSaveMenu_Down || a == kSaveMenu_Left || a == kSaveMenu_Right ||
          a == kSaveMenu_PageUp || a == kSaveMenu_PageDown;
+}
+
+// Scrolling between overworld areas, mosaic area changes, and moving
+// between dungeon rooms or along stairs.
+static bool InScreenTransition() {
+  uint8 m = main_module_index, s = submodule_index;
+  if (m == 9)
+    return (s >= 1 && s <= 7) || (s >= 13 && s <= 22);
+  if (m == 7)
+    return s == 1 || s == 2 || s == 6 || (s >= 0x11 && s <= 0x13);
+  return false;
+}
+
+static bool SkipFrameForTransition() {
+  static int run;
+  int speed = g_config.transition_speed;
+  if (!InScreenTransition()) {
+    run = 0;
+    return false;
+  }
+#ifdef SAVEMENU_SELFTEST
+  g_st_trans_frames++;
+#endif
+  bool skip;
+  if (speed == 1)
+    skip = false;
+  else if (speed == 0)
+    skip = ++run < 240;  // instant (with a limit, just in case)
+  else
+    skip = ++run % speed != 0;
+  if (!skip)
+    run = speed == 0 ? 0 : run;
+#ifdef SAVEMENU_SELFTEST
+  if (!skip) g_st_trans_shown++;
+#endif
+  return skip;
 }
 
 static void HandleSaveMenuKey(int key, int mod) {

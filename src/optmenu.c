@@ -59,6 +59,7 @@ enum {
   kO_Deadzone,
   kO_TurboSpeed,
   kO_SaveHold,
+  kO_TransitionSpeed,
   kO_Feature,  // + index in kFeatureDefs
 };
 
@@ -117,6 +118,7 @@ static const OptDef kOptions[] = {
   { kT_Toggle, kO_DiscordLocation, "Mostrar dónde estás", "Incluye en Discord el dungeon o la zona del mapa en la que estás." },
   { kT_Header, 0, "Rebobinado, avance y autoguardado", NULL },
   { kT_Slider, kO_TurboSpeed, "Avance rápido", "Velocidad mientras mantenés la tecla de avance rápido." },
+  { kT_Choice, kO_TransitionSpeed, "Transiciones", "Velocidad del paso entre zonas del mapa y entre habitaciones de los dungeons." },
   { kT_Slider, kO_RewindSeconds, "Rebobinado", "Cuántos segundos se pueden rebobinar. Cambiarlo borra el historial actual." },
   { kT_Slider, kO_AutosaveMinutes, "Autoguardar cada", "Cada cuánto se guarda un state solo. Igual se guarda al salir y al entrar o salir de dungeons." },
   { kT_Slider, kO_SaveHold, "Guardar state manteniendo", "Cuánto hay que mantener la tecla de guardar state para que guarde. Soltar antes cancela. 0 guarda al instante." },
@@ -317,6 +319,7 @@ static int GetValue(int id) {
   case kO_Deadzone: return g_config.stick_deadzone;
   case kO_TurboSpeed: return g_config.turbo_speed < 2 ? 1 : g_config.turbo_speed;
   case kO_SaveHold: return g_config.save_hold_ms;
+  case kO_TransitionSpeed: return g_config.transition_speed;
   case kO_Aspect: return CurrentAspect();
   default:
     if (id >= kO_Feature && id < kO_Feature + countof(kFeatureDefs))
@@ -365,6 +368,11 @@ static void FormatValue(int id, char *buf, size_t n) {
   case kO_TurboSpeed:
     if (v <= 1) snprintf(buf, n, "Máxima");
     else snprintf(buf, n, "x%d", v);
+    break;
+  case kO_TransitionSpeed:
+    if (v == 0) snprintf(buf, n, "Instantáneas");
+    else if (v == 1) snprintf(buf, n, "Normales");
+    else snprintf(buf, n, "x%d más rápidas", v);
     break;
   case kO_SaveHold:
     if (v <= 0) snprintf(buf, n, "Al instante");
@@ -481,6 +489,18 @@ static void ChangeOption(int id, int dir) {
     SaveInt("Graphics", "WindowScale", s);
     if (Main_GetDisplayMode() == 2)
       SetMsg("El tamaño se usa al volver a modo ventana%s", NULL);
+    return;
+  }
+  if (type == kT_Choice && id == kO_TransitionSpeed) {
+    // Normal -> x2 -> x3 -> x4 -> instant
+    static const int8 kOrder[5] = { 1, 2, 3, 4, 0 };
+    int pos = 0;
+    for (int i = 0; i < 5; i++)
+      if (kOrder[i] == g_config.transition_speed) pos = i;
+    if (dir == 0) dir = 1;
+    pos = (pos + dir + 5) % 5;
+    g_config.transition_speed = kOrder[pos];
+    SaveInt("General", "TransitionSpeed", g_config.transition_speed);
     return;
   }
   if (type == kT_Choice && id == kO_MenuButtons) {

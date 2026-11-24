@@ -541,6 +541,9 @@ static bool HandleIniConfig(int section, const char *key, char *value) {
     } else if (StringEqualsNoCase(key, "DiscordAppId")) {
       g_config.discord_app_id = value;
       return true;
+    } else if (StringEqualsNoCase(key, "TransitionSpeed")) {
+      g_config.transition_speed = IntMin(IntMax(atoi(value), 0), 4);
+      return true;
     } else if (StringEqualsNoCase(key, "SaveHoldMs")) {
       g_config.save_hold_ms = IntMin(IntMax(atoi(value), 0), 5000);
       return true;
@@ -718,6 +721,7 @@ void ParseConfigFile(const char *filename) {
   g_config.stick_deadzone = 30;
   g_config.turbo_speed = 0;
   g_config.save_hold_ms = 1000;
+  g_config.transition_speed = 2;
   g_config.discord = true;
   g_config.nintendo_menu_buttons = true;
   g_config.discord_location = true;
